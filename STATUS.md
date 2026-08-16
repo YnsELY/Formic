@@ -4,10 +4,19 @@ One line per brick. `À VENIR` / `EN COURS` / `VALIDÉE` / `GELÉE`. A brick bec
 `VALIDÉE` only when its step's exit checklist is green **and** a human has signed
 off. Nothing downstream starts before that (plan rule 1).
 
-> **Current state — step 1: implementation complete, exit checklist run, awaiting
-> human sign-off.** Report: [`reports/step1_report.md`](reports/step1_report.md).
-> Artefacts: `artifacts/step1/`. One decision needs sign-off before step 2:
-> **ADR-0002** (text-only entry point). Step 2 must not start before that.
+> **Current state — step 1: exit checklist run, 6/7 PASS, 1 FAIL — blocking.**
+> Prefill is proven bit-identical between entry points (SHA-256 match, 6/6
+> prompts). Multi-step **decode** diverges heavily (logit deltas 4.8–12.6,
+> starting at generation step 1–2) even in a manual greedy loop that bypasses
+> `generate()` entirely and matches `position_ids=None` on both sides — this
+> is NOT explained by the `generate()`-wrapper position-id issue found earlier
+> (report §5.6), and NOT consistent with the ~1e-5 BF16 rounding noise the
+> audit documents. Root cause is unlocated: likely the KV/GDN **cache update**
+> path itself, not general numerics. Only cache *length* was compared, not
+> cache *content* — that comparison is the immediate next step.
+> Report: [`reports/step1_report.md`](reports/step1_report.md), artefacts:
+> `artifacts/step1/`. **Step 2 must not start until this is root-caused and
+> the checklist is green** (plan rule 1); ADR-0002 sign-off is blocked on it.
 
 Reference documents, in order of authority: the checkpoint audit
 (`/workspace/audits/qwen3_8_27b/`) → `FINAL_TARGET_ARCHITECTURE.md` (CAPE-R) →
