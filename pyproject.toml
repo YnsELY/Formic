@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "formic"
+version = "0.1.0"
+description = "Formic - software-engineering executor on the Qwen3.8-27B substrate"
+requires-python = ">=3.11"
+dependencies = [
+    "torch==2.4.1",
+    "transformers==5.8.0",
+    "accelerate==1.14.0",
+    "safetensors==0.8.0",
+    "pyyaml>=6.0",
+    "numpy",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+formic = "formic.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["formic*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["weights: requires loading the 55 GB checkpoint"]

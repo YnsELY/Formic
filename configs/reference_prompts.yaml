@@ -1,0 +1,44 @@
+# Frozen reference prompt set for backbone verification.
+#
+# This set is FROZEN: adding, removing or editing a prompt changes the set hash
+# and invalidates every stored comparison. Step 2 extends it (long instruction,
+# small software task) and re-freezes with a new version id.
+#
+# Kept deliberately short: step 1 only needs a preliminary Formic-vs-HF check,
+# and every token costs a forward pass through 64 layers with CPU offload.
+
+version: 1
+description: "step-1 preliminary identity prompts (text, code, instruction)"
+
+prompts:
+  - id: audit_echo
+    kind: raw
+    # Same prompt as the audit's dynamic trace, so Formic numbers can be
+    # compared with results/dynamic_forward_trace.json and baseline_identity.json.
+    text: "Audit technique court."
+
+  - id: plain_text
+    kind: raw
+    text: "The capital of France is"
+
+  - id: code_completion
+    kind: raw
+    text: "def fibonacci(n: int) -> int:\n    \"\"\"Return the n-th Fibonacci number.\"\"\"\n"
+
+  - id: code_bugfix
+    kind: raw
+    text: "# Fix the off-by-one error in this function:\ndef last_index(items):\n    return len(items)\n"
+
+  - id: instruction_short
+    kind: chat
+    messages:
+      - role: user
+        content: "Rename the variable `x` to `count` in this snippet and change nothing else:\n\ntotal = 0\nfor x in items:\n    total += x\n"
+
+  - id: instruction_scope
+    kind: chat
+    messages:
+      - role: system
+        content: "You are an execution model. Do exactly what is asked, nothing more."
+      - role: user
+        content: "Add a None check at the start of parse_field. Do not touch any other function."
