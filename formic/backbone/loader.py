@@ -1,13 +1,10 @@
 """Backbone loading: Qwen3.8-27B as an untouched neural substrate.
 
-Two modes, both loading the *stock* Hugging Face implementation — no cell is
-re-implemented, no module is copy-modified (A11):
-
-``text_only`` (default)
-    ``Qwen3_5ForCausalLM`` + a pure key renaming ``model.language_model.* ->
-    model.*``. This is how A7 is satisfied *structurally*: the class never
-    constructs a vision tower, so "text-only" is a property of the module tree,
-    not a config flag (``language_model_only`` is inoperative in this runtime).
+SPEC-01 loads the *stock* Hugging Face ``Qwen3_5ForCausalLM`` implementation —
+no cell is re-implemented and no module is copy-modified (A11). A pure key
+renaming ``model.language_model.* -> model.*`` is checked as a strict bijection
+before loading. This satisfies A7 structurally: the selected class never
+constructs a vision tower.
 
     Equivalence argument (verified in the runtime source, proved empirically by
     the step-2 identity suite): ``Qwen3_5Model.forward`` on pure text takes the
@@ -16,12 +13,8 @@ re-implemented, no module is copy-modified (A11):
     ``Qwen3_5Model.language_model`` *is* a ``Qwen3_5TextModel``. The two paths
     therefore run the same modules on the same inputs.
 
-``reference_multimodal``
-    Stock ``Qwen3_5ForConditionalGeneration``, used only as the reference side
-    of comparison runs.
-
-Loading is strict in both modes (A12): the checkpoint inventory is validated
-first, the loaded tensor set is matched back afterwards, and every intentional
+Loading is strict (A12): the checkpoint inventory is validated first, the
+loaded tensor set is matched back afterwards, and every intentional
 exclusion (vision in text-only, MTP always — A10) is declared and counted.
 """
 
@@ -36,7 +29,7 @@ from typing import Any
 import torch
 
 from formic.backbone import constants as C
-from formic.backbone.boundaries import count_registered_hooks
+from formic.backbone.boundaries import BoundaryHookManager, count_registered_hooks
 from formic.backbone.groups import HybridGroupView
 from formic.backbone.inventory import (
     CheckpointInventory,
@@ -63,6 +56,8 @@ class BackboneHandle:
     inventory: CheckpointInventory
     load_report: StrictLoadReport
     config: RunConfig
+    boundary_manager: BoundaryHookManager
+    hf_loading_info: dict[str, Any] = field(default_factory=dict)
     structure_report: dict[str, Any] = field(default_factory=dict)
     load_seconds: float = 0.0
     memory: dict[str, Any] = field(default_factory=dict)
@@ -94,6 +89,8 @@ class BackboneHandle:
             "memory": self.memory,
             "structure": self.structure_report,
             "load_report": self.load_report.to_dict(),
+            "hf_loading_info": self.hf_loading_info,
+            "key_mapping": self.inventory.text_only_mapping_report(),
         }
 
 
@@ -105,7 +102,10 @@ def load_tokenizer(checkpoint_path: str | Path) -> Any:
 
 def load_backbone(config: RunConfig, *, verbose: bool = True) -> BackboneHandle:
     """Load the backbone described by ``config`` under strict part-1 rules."""
+    from formic.science.determinism import configure_determinism
+
     config.validate()
+    configure_determinism(config.run.seed, config.run.deterministic)
     backbone_cfg = config.backbone
     path = Path(backbone_cfg.checkpoint_path)
     if not path.is_dir():
@@ -130,7 +130,9 @@ def load_backbone(config: RunConfig, *, verbose: bool = True) -> BackboneHandle:
     if torch.cuda.is_available():
         torch.cuda.reset_peak_memory_stats()
     started = time.time()
-    model = _load_model(path, backbone_cfg, raw_config, inventory, verbose=verbose)
+    model, hf_loading_info = _load_model(
+        path, backbone_cfg, raw_config, inventory, verbose=verbose
+    )
     load_seconds = time.time() - started
     model.eval()
 
@@ -142,8 +144,17 @@ def load_backbone(config: RunConfig, *, verbose: bool = True) -> BackboneHandle:
         if _has_vision_tower(model):
             raise BackboneLoadError("vision tower present in text-only mode (violates A7)")
 
+    manager = BoundaryHookManager.from_config(model, view, config.boundaries)
+    manager.attach()
     hooks = count_registered_hooks(model)
+    if hooks != manager.num_active_hooks:
+        manager.detach()
+        raise BackboneLoadError(
+            f"decoder stack reports {hooks} hooks, manager attached "
+            f"{manager.num_active_hooks}"
+        )
     if config.identity_mode() and hooks:
+        manager.detach()
         raise BackboneLoadError(
             f"{hooks} layer hook(s) registered while every flag is OFF; identity mode "
             "requires an unmodified forward graph"
@@ -164,6 +175,8 @@ def load_backbone(config: RunConfig, *, verbose: bool = True) -> BackboneHandle:
         inventory=inventory,
         load_report=report,
         config=config,
+        boundary_manager=manager,
+        hf_loading_info=hf_loading_info,
         structure_report=structure_report,
         load_seconds=load_seconds,
         memory=memory,
@@ -186,12 +199,9 @@ def _load_model(
     inventory: CheckpointInventory,
     *,
     verbose: bool,
-) -> Any:
-    from transformers import Qwen3_5ForCausalLM, Qwen3_5ForConditionalGeneration
-    from transformers.models.qwen3_5.configuration_qwen3_5 import (
-        Qwen3_5Config,
-        Qwen3_5TextConfig,
-    )
+) -> tuple[Any, dict[str, Any]]:
+    from transformers import Qwen3_5ForCausalLM
+    from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5TextConfig
 
     dtype = getattr(torch, backbone_cfg.dtype)
     kwargs: dict[str, Any] = {
@@ -202,21 +212,67 @@ def _load_model(
         kwargs["device_map"] = backbone_cfg.device_map
         kwargs["max_memory"] = _normalise_max_memory(backbone_cfg.max_memory)
 
-    if backbone_cfg.mode == "text_only":
-        text_config = Qwen3_5TextConfig(**raw_config["text_config"])
-        # A7: Qwen3_5ForCausalLM builds Qwen3_5TextModel only - no vision tower.
-        inventory_mapping = inventory.key_mapping("text_only")
-        if verbose:
-            print(f"[formic] text-only load, key_mapping={inventory_mapping}")
-        model = Qwen3_5ForCausalLM.from_pretrained(
-            str(path), config=text_config, key_mapping=inventory_mapping, **kwargs
+    text_config = Qwen3_5TextConfig(**raw_config["text_config"])
+    # A7: Qwen3_5ForCausalLM builds Qwen3_5TextModel only - no vision tower.
+    inventory_mapping = inventory.key_mapping("text_only")
+    mapping_report = inventory.text_only_mapping_report()
+    if not all(
+        mapping_report[key]
+        for key in (
+            "injective",
+            "surjective_onto_expected",
+            "roundtrip",
+            "metadata_preserved",
+            "regex_matches_name_map",
         )
-    else:
-        full_config = Qwen3_5Config(**raw_config)
-        model = Qwen3_5ForConditionalGeneration.from_pretrained(
-            str(path), config=full_config, **kwargs
+    ):
+        raise BackboneLoadError(f"text-only key mapping is not bijective: {mapping_report}")
+    if verbose:
+        print(
+            f"[formic] text-only load, key_mapping={inventory_mapping}, "
+            f"bijection={mapping_report['source_tensors']} tensors"
         )
-    return model
+    model, loading_info = Qwen3_5ForCausalLM.from_pretrained(
+        str(path),
+        config=text_config,
+        key_mapping=inventory_mapping,
+        output_loading_info=True,
+        **kwargs,
+    )
+    return model, validate_hf_loading_info(loading_info, inventory)
+
+
+def validate_hf_loading_info(
+    loading_info: dict[str, Any], inventory: CheckpointInventory
+) -> dict[str, Any]:
+    """Make Transformers' source-to-target loading diagnostics fatal (A12)."""
+    declared_exclusion_names = {
+        record.name
+        for family in ("vision", "mtp")
+        for record in inventory.by_family(family)  # type: ignore[arg-type]
+    }
+    missing = tuple(sorted(loading_info.get("missing_keys", ())))
+    reported_unexpected = tuple(sorted(loading_info.get("unexpected_keys", ())))
+    unexpected = tuple(
+        name for name in reported_unexpected if name not in declared_exclusion_names
+    )
+    mismatched = tuple(loading_info.get("mismatched_keys", ()))
+    errors = tuple(loading_info.get("error_msgs", ()))
+    if missing or unexpected or mismatched or errors:
+        raise BackboneLoadError(
+            "Transformers loading_info is not strict: "
+            f"missing={missing[:5]}, unexpected={unexpected[:5]}, "
+            f"mismatched={mismatched[:5]}, errors={errors[:5]}"
+        )
+    return {
+        "missing_keys": 0,
+        "unexpected_keys": 0,
+        "mismatched_keys": 0,
+        "error_messages": 0,
+        "reported_declared_exclusions": sum(
+            name in declared_exclusion_names for name in reported_unexpected
+        ),
+    }
 
 
 def _normalise_max_memory(max_memory: dict[str, str]) -> dict[Any, str]:
@@ -285,5 +341,5 @@ def verify_checkpoint_only(checkpoint_path: str | Path) -> dict[str, Any]:
         "inventory": inventory.summary(),
         "structure": view.describe(),
         "expected_text_only_params": expected_parameter_count("text_only", inventory),
-        "expected_multimodal_params": expected_parameter_count("reference_multimodal", inventory),
+        "expected_multimodal_params": expected_parameter_count("audit_multimodal", inventory),
     }

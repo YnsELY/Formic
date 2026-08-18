@@ -16,6 +16,7 @@ Reading uses the safetensors headers only — no weight bytes are touched.
 from __future__ import annotations
 
 import json
+import re
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,10 +30,11 @@ __all__ = [
     "StrictLoadReport",
     "InventoryError",
     "assert_strict_load",
+    "remap_key",
 ]
 
 Family = Literal["text", "lm_head", "vision", "mtp"]
-BackboneMode = Literal["text_only", "reference_multimodal"]
+InventoryTarget = Literal["text_only", "audit_multimodal"]
 
 #: safetensors dtype string -> (torch dtype name, bytes per element)
 _DTYPES = {
@@ -266,33 +268,93 @@ class CheckpointInventory:
 
     # -- expectations for a loaded model -----------------------------------
 
-    def expected_model_tensors(self, mode: BackboneMode) -> dict[str, tuple[int, ...]]:
-        """Map ``loaded parameter name -> shape`` for a given backbone mode.
+    def expected_model_tensors(self, mode: InventoryTarget) -> dict[str, tuple[int, ...]]:
+        """Map ``parameter name -> shape`` for a static inventory target.
 
         ``text_only``
             ``Qwen3_5ForCausalLM``: checkpoint ``model.language_model.*`` becomes
             ``model.*`` (A7 — the vision tower is never constructed).
-        ``reference_multimodal``
-            stock ``Qwen3_5ForConditionalGeneration``: names unchanged, vision
-            included, MTP still excluded (A10).
+        ``audit_multimodal``
+            Header-only accounting for the audited stock multimodal tree: names
+            unchanged, vision included, MTP excluded. This is not a loadable
+            SPEC-01 runtime mode.
         """
+        if mode == "text_only":
+            records = {record.name: record for record in self.records}
+            return {
+                target: records[source].shape
+                for source, target in self.text_only_name_mapping().items()
+            }
+
         expected: dict[str, tuple[int, ...]] = {}
         for record in self.records:
             if record.family == "mtp":
                 continue  # A10: never loaded in part 1
-            if record.family == "vision" and mode == "text_only":
-                continue  # A7: tower not constructed
             expected[remap_key(record.name, mode)] = record.shape
         return expected
 
-    def declared_exclusions(self, mode: BackboneMode) -> dict[str, int]:
+    def text_only_name_mapping(self) -> dict[str, str]:
+        """Return the complete checkpoint-name -> model-name bijection.
+
+        Only the 851 tensors intentionally loaded in SPEC-01 participate. Vision
+        and MTP are declared exclusions, not dropped by this mapping. A target
+        collision is fatal because it would merge two checkpoint tensors under
+        one loaded-model name.
+        """
+        source_records = tuple(
+            record for record in self.records if record.family in ("text", "lm_head")
+        )
+        mapping = {record.name: remap_key(record.name, "text_only") for record in source_records}
+        if len(mapping) != len(source_records):
+            raise InventoryError("duplicate source name in text-only tensor mapping")
+
+        targets = tuple(mapping.values())
+        if len(set(targets)) != len(targets):
+            collisions = sorted(name for name in set(targets) if targets.count(name) > 1)
+            raise InventoryError(
+                "text-only key mapping is not injective; target collisions: "
+                f"{collisions[:5]}"
+            )
+        return mapping
+
+    def text_only_mapping_report(self) -> dict[str, Any]:
+        """Machine-readable proof that the key rename is structural and bijective."""
+        mapping = self.text_only_name_mapping()
+        inverse = {target: source for source, target in mapping.items()}
+        records = {record.name: record for record in self.records}
+        expected = self.expected_model_tensors("text_only")
+        regex, replacement = next(iter(self.key_mapping("text_only").items()))
+
+        metadata_preserved = all(
+            expected[target] == records[source].shape
+            and records[source].dtype == C.CHECKPOINT_DTYPE
+            and records[source].num_params == _numel(expected[target])
+            for source, target in mapping.items()
+        )
+        roundtrip = all(inverse[target] == source for source, target in mapping.items())
+        return {
+            "source_tensors": len(mapping),
+            "target_tensors": len(inverse),
+            "renamed_tensors": sum(source != target for source, target in mapping.items()),
+            "unchanged_tensors": sum(source == target for source, target in mapping.items()),
+            "injective": len(mapping) == len(inverse),
+            "surjective_onto_expected": set(inverse) == set(expected),
+            "roundtrip": roundtrip,
+            "metadata_preserved": metadata_preserved,
+            "regex_matches_name_map": all(
+                re.sub(regex, replacement, source) == target
+                for source, target in mapping.items()
+            ),
+        }
+
+    def declared_exclusions(self, mode: InventoryTarget) -> dict[str, int]:
         """Tensor counts intentionally excluded, by family. Verified, never silent."""
         exclusions = {"mtp": len(self.by_family("mtp"))}
         if mode == "text_only":
             exclusions["vision"] = len(self.by_family("vision"))
         return exclusions
 
-    def key_mapping(self, mode: BackboneMode) -> dict[str, str]:
+    def key_mapping(self, mode: InventoryTarget) -> dict[str, str]:
         """Regex key mapping handed to ``from_pretrained(key_mapping=...)``.
 
         Pure renaming of the text namespace; no tensor is split, merged,
@@ -303,7 +365,7 @@ class CheckpointInventory:
         return {r"^model\.language_model\.": "model."}
 
 
-def remap_key(checkpoint_name: str, mode: BackboneMode) -> str:
+def remap_key(checkpoint_name: str, mode: InventoryTarget) -> str:
     """Translate a checkpoint tensor name into the loaded-model namespace."""
     if mode == "text_only" and checkpoint_name.startswith(C.CKPT_TEXT_PREFIX):
         return C.CAUSAL_LM_TEXT_PREFIX + checkpoint_name[len(C.CKPT_TEXT_PREFIX) :]
@@ -319,7 +381,7 @@ def remap_key(checkpoint_name: str, mode: BackboneMode) -> str:
 class StrictLoadReport:
     """Result of matching a loaded model against the checkpoint inventory."""
 
-    mode: BackboneMode
+    mode: InventoryTarget
     matched: int
     missing: tuple[str, ...]
     unexpected: tuple[str, ...]
@@ -379,7 +441,7 @@ class StrictLoadReport:
 def assert_strict_load(
     model: Any,
     inventory: CheckpointInventory,
-    mode: BackboneMode,
+    mode: InventoryTarget,
     *,
     raise_on_failure: bool = True,
 ) -> StrictLoadReport:

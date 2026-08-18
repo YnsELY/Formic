@@ -14,9 +14,33 @@ import sys
 from pathlib import Path
 from typing import Any
 
-__all__ = ["environment_report", "git_commit", "git_dirty", "REPO_ROOT"]
+__all__ = [
+    "configure_determinism",
+    "environment_report",
+    "git_commit",
+    "git_dirty",
+    "REPO_ROOT",
+]
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def configure_determinism(seed: int, deterministic: bool = True) -> None:
+    """Apply the run's RNG and backend policy before any model execution."""
+    import random
+
+    import numpy as np
+    import torch
+
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = deterministic
+    # Benchmarking is not a configured behavior and can select a different
+    # convolution algorithm based on timing noise, so it remains disabled.
+    torch.backends.cudnn.benchmark = False
 
 
 def git_commit(repo: str | Path | None = None) -> str | None:
@@ -79,6 +103,7 @@ def environment_report() -> dict[str, Any]:
             ]
         report["cudnn_deterministic"] = torch.backends.cudnn.deterministic
         report["cudnn_benchmark"] = torch.backends.cudnn.benchmark
+        report["deterministic_algorithms"] = torch.are_deterministic_algorithms_enabled()
     except ImportError:  # pragma: no cover
         report["torch"] = None
 

@@ -1,0 +1,17 @@
+# Formic Agent Instructions
+
+- Work from `/workspace/formic`; the importable package is `formic/`, while `configs/`, `tests/`, `scripts/`, `docs/`, `experiments/`, `reports/`, and `STATUS.md` are repository-level concerns.
+- Read `docs/conventions.md` before changing code. For architecture or checkpoint questions, authority is the audit under `/workspace/audits/qwen3_8_27b/`, then CAPE-R, then the implementation plan, then this repository.
+- Steps 1 through 8 are strictly ordered. Read `STATUS.md` before advancing a step; do not begin the next step until the prior exit checklist is green and human-validated. SPEC-01 is currently blocked by cached-decode non-reproducibility; the stock CUDA GDN path contains a cumsum with no deterministic torch 2.4 implementation.
+- Use `bash scripts/ci_fast.sh` as the canonical weight-free gate. It runs `python3 -m formic.cli verify`, the full `python3 -m pytest tests/ -q` suite, and the A11/A12/inert-boundary guard tests.
+- Tests require the optional development dependency; install it with `python -m pip install -e '.[dev]'` when `pytest` is unavailable.
+- For focused checks, run `PYTHONPATH=$PWD python -m pytest tests/test_groups.py -q` (replace with the relevant test file), or run `PYTHONPATH=$PWD python -m formic.cli verify` for structural verification. There is no need to load model weights for these checks.
+- Weight-free CLI commands are `python -m formic.cli verify`, `structure`, `inventory`, `config`, and `env`; `load` and `generate` load the roughly 55 GB checkpoint at `/workspace/Qwen3.8-27B`.
+- A full preliminary verification is expensive and staged in separate processes: `python scripts/step1_acceptance.py --stage formic`, `--stage hooks`, `--stage hf`, then `--stage compare`; `--stage all` runs them sequentially. Do not call this the identity gate or claim identity from prefill alone; SPEC-02 owns tolerances and blocking identity CI.
+- Keep `configs/default.yaml` and its resolved config hash in mind for every run. Unknown config keys are fatal, all Formic flags and boundary hooks default to off, and part-2 flags are rejected during part 1.
+- Preserve the identity invariant: with all flags off, Formic must reproduce stock Qwen. Formic wraps stock Hugging Face modules; do not reimplement, copy-modify, subclass, or monkeypatch Qwen cells. The A11 guard is `tests/test_no_cell_reimplementation.py`.
+- Treat checkpoint loading as strict: inventory is validated before loading and the loaded tensor set is checked afterward; missing, unexpected, shape, or dtype differences are fatal. The A12 implementation and tests are `formic/backbone/inventory.py` and `tests/test_inventory.py`.
+- SPEC-01 only loads the causal-LM text entrypoint, including for the direct HF reference, so the vision tower is never constructed. Hybrid groups are a view over the intact 64-layer model: 16 groups of 3 GDN layers plus 1 attention layer, with 17 inert boundaries.
+- Part-1 measurements are text-only, batch 1, Python-target repositories, and BF16 for decisive results. Record config hash, commit, seeds, environment report, and an `EXP-…` registry entry for quoted measurements.
+- Structural decisions require an ADR; each step also requires tests, a short report, and a `STATUS.md` update. Use the repository naming conventions in `docs/conventions.md` for branches, experiments, ADRs, artifacts, and reports.
+- Generated run outputs belong under `artifacts/` or `logs/`; do not use them as source code or silently update committed reports/registries while running exploratory commands.

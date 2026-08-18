@@ -37,18 +37,9 @@ __all__ = [
 
 def set_seed(seed: int, deterministic: bool = True) -> None:
     """Seed every RNG that can influence a run."""
-    import random
+    from formic.science.determinism import configure_determinism
 
-    import numpy as np
-
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-    if deterministic:
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
+    configure_determinism(seed, deterministic)
 
 
 @dataclass
@@ -161,6 +152,7 @@ def generate(
     attention_mask = encoded.get("attention_mask")
     if attention_mask is not None:
         attention_mask = attention_mask.to(device)
+    _validate_batch1_no_padding(input_ids, attention_mask)
 
     kwargs: dict[str, Any] = {
         "max_new_tokens": max_new_tokens,
@@ -218,6 +210,7 @@ def forward_logits(
     """
     device = _input_device(handle)
     input_ids = torch.tensor([list(token_ids)], dtype=torch.long, device=device)
+    _validate_batch1_no_padding(input_ids)
 
     started = time.time()
     outputs = handle.model(input_ids=input_ids, use_cache=False)
@@ -248,19 +241,10 @@ def manual_greedy_decode(
 ) -> dict[str, Any]:
     """Greedy decode written out explicitly, bypassing ``model.generate()``.
 
-    Why this exists: ``generate()`` is a *wrapper* whose behaviour differs
-    between entry points. ``Qwen3_5ForConditionalGeneration`` overrides
-    ``_prepare_position_ids_for_generation`` ("requires 3D position ids") and, in
-    decode, feeds the text model ``position_ids`` shaped ``[1, B, S]``; the text
-    model only recognises the ``[4, B, S]`` contract (axis 0 = text positions,
-    axes 1..3 = M-RoPE), so anything else sets ``text_position_ids = None``.
-    ``Qwen3_5ForCausalLM`` uses the generic implementation and lands on the
-    documented ``[4, B, S]`` contract instead (audit 05).
-
-    This loop puts both entry points on exactly the same path — ``position_ids``
-    left to ``None``, so the text model derives them itself — which is what an
-    identity comparison of the *backbone* must measure. The generate()-level
-    difference is a separate, documented finding.
+    SPEC-01 uses this beside native ``generate()`` to make the stock cached
+    forward sequence directly observable on both CausalLM executions. Position
+    IDs remain ``None`` so the text model follows its documented four-axis
+    position contract without wrapper-specific preparation.
 
     Cache handling: the model creates its own cache (A2 - never build a
     ``DynamicCache`` without the model config), it is used strictly forward, and
@@ -268,6 +252,7 @@ def manual_greedy_decode(
     """
     device = _input_device(handle)
     input_ids = torch.tensor([list(token_ids)], dtype=torch.long, device=device)
+    _validate_batch1_no_padding(input_ids)
 
     past = None
     generated: list[int] = []
@@ -298,6 +283,26 @@ def _input_device(handle: BackboneHandle) -> torch.device:
     if isinstance(device, torch.device):
         return device
     return next(handle.model.parameters()).device
+
+
+def _validate_batch1_no_padding(
+    input_ids: torch.Tensor,
+    attention_mask: torch.Tensor | None = None,
+) -> None:
+    """Enforce SPEC-01's batch-1, no-padding execution boundary (A8)."""
+    if input_ids.ndim != 2 or input_ids.shape[0] != 1:
+        raise ValueError(
+            f"SPEC-01 requires batch 1 with input_ids shaped [1, sequence], "
+            f"got {tuple(input_ids.shape)}"
+        )
+    if attention_mask is not None:
+        if attention_mask.shape != input_ids.shape:
+            raise ValueError(
+                f"attention_mask shape {tuple(attention_mask.shape)} does not match "
+                f"input_ids {tuple(input_ids.shape)}"
+            )
+        if not bool(torch.all(attention_mask == 1)):
+            raise ValueError("SPEC-01 forbids padded inputs (A8)")
 
 
 def _hash_ids(ids: Sequence[int]) -> str:

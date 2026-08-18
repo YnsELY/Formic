@@ -101,7 +101,8 @@ def test_no_vendored_copy_of_the_qwen_modeling_file():
 def test_backbone_uses_stock_classes_only():
     """The loader must import the official classes, not derive from them."""
     loader = (PACKAGE_ROOT / "backbone" / "loader.py").read_text(encoding="utf-8")
-    assert "from transformers import Qwen3_5ForCausalLM, Qwen3_5ForConditionalGeneration" in loader
+    assert "from transformers import Qwen3_5ForCausalLM" in loader
+    assert "Qwen3_5ForConditionalGeneration" not in loader
     tree = ast.parse(loader)
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):

@@ -27,7 +27,7 @@ from formic.backbone import constants as C
 CONFIG_VERSION = 1
 
 ThinkingMode = Literal["on", "off", "capped"]
-BackboneMode = Literal["text_only", "reference_multimodal"]
+BackboneMode = Literal["text_only"]
 
 
 class ConfigError(ValueError):
@@ -62,9 +62,7 @@ class RunSection:
 @dataclass(frozen=True)
 class BackboneSection:
     checkpoint_path: str = "/workspace/Qwen3.8-27B"
-    #: ``text_only``  -> Qwen3_5ForCausalLM, vision tower never constructed (A7).
-    #: ``reference_multimodal`` -> stock Qwen3_5ForConditionalGeneration, used
-    #: only as the HF reference in comparison runs.
+    #: The only part-1 runtime mode: Qwen3_5ForCausalLM, with no vision tower (A7).
     mode: BackboneMode = "text_only"
     dtype: str = "bfloat16"
     #: ``eager`` makes masks explicit and is the audited backend; keep it as the
@@ -78,8 +76,11 @@ class BackboneSection:
     assert_no_vision_tower: bool = True
 
     def validate(self) -> None:
-        if self.mode not in ("text_only", "reference_multimodal"):
-            raise ConfigError(f"backbone.mode invalid: {self.mode}")
+        if self.mode != "text_only":
+            raise ConfigError(
+                "backbone.mode must be 'text_only' in part 1; multimodal execution "
+                "is outside SPEC-01"
+            )
         if self.dtype != "bfloat16":
             raise ConfigError(
                 "backbone.dtype must be bfloat16: BF16 is the reference for every "
@@ -149,10 +150,10 @@ class SamplingSection:
 class BoundariesSection:
     """The 17 group-boundary insertion points, all inert by default.
 
-    ``enabled_observers`` attaches read-only hooks (used by step 2's identity
-    instrumentation). ``enabled_insertions`` is reserved for step 8 sidecars and
-    must stay empty in part 1. With both empty, *no hook is registered at all*,
-    so the forward pass is byte-for-byte the stock HF graph.
+    ``enabled_observers`` attaches read-only hooks. ``enabled_insertions`` may
+    select no-op hooks for SPEC-01's inertness proof; transforming callbacks
+    remain reserved for later steps. With both lists empty, *no hook is
+    registered at all*, so the forward pass is the stock HF graph.
     """
 
     enabled_observers: tuple[str, ...] = ()
@@ -161,6 +162,10 @@ class BoundariesSection:
     def validate(self) -> None:
         from formic.backbone.groups import BOUNDARY_NAMES
 
+        if len(set(self.enabled_observers)) != len(self.enabled_observers):
+            raise ConfigError("boundaries.enabled_observers contains duplicate names")
+        if len(set(self.enabled_insertions)) != len(self.enabled_insertions):
+            raise ConfigError("boundaries.enabled_insertions contains duplicate names")
         for name in self.enabled_observers:
             if name not in BOUNDARY_NAMES:
                 raise ConfigError(f"unknown boundary in enabled_observers: {name}")

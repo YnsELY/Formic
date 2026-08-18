@@ -104,7 +104,7 @@ def cmd_inventory(args: argparse.Namespace) -> int:
     for family, stats in summary["families"].items():
         print(f"    {family:<9}: {stats['tensors']:>4} tensors / {stats['params']:>15,} params")
     print()
-    for mode in ("text_only", "reference_multimodal"):
+    for mode in ("text_only", "audit_multimodal"):
         expected = inventory.expected_model_tensors(mode)  # type: ignore[arg-type]
         params = sum(_numel(shape) for shape in expected.values())
         print(
@@ -152,7 +152,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
             print(f"      {detail}")
     if result:
         print(f"\n  expected params  text_only : {result['expected_text_only_params']:,}")
-        print(f"  expected params  multimodal: {result['expected_multimodal_params']:,}")
+        print(f"  audited params   multimodal: {result['expected_multimodal_params']:,}")
     ok = all(ok for _, ok, _ in checks)
     print(f"\n  OVERALL: {'PASS' if ok else 'FAIL'}")
     return 0 if ok else 1

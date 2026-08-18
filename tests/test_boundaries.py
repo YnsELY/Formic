@@ -135,6 +135,14 @@ def test_insertion_with_callback_changes_the_stream(model, view):
     assert float(result.flatten()[0]) == 64.0 + 100.0
 
 
+def test_callback_cannot_activate_a_boundary_not_selected_by_config(model, view):
+    manager = BoundaryHookManager(model, view)
+    with pytest.raises(BoundaryHookError):
+        manager.set_observer("PRE_G1", lambda event: None)
+    with pytest.raises(BoundaryHookError):
+        manager.set_insertion("POST_G16", lambda event: event.hidden_states)
+
+
 def test_insertion_at_the_final_boundary_is_applied(model, view):
     hidden = torch.zeros(1, 1, 4)
     manager = BoundaryHookManager(model, view).configure(insertions=("POST_G16",))
@@ -156,6 +164,13 @@ def test_insertion_cannot_change_shape_or_dtype(model, view):
 def test_unknown_boundary_is_rejected(model, view):
     with pytest.raises(ValueError):
         BoundaryHookManager(model, view).configure(observers=("NOT_A_BOUNDARY",))
+
+
+def test_duplicate_boundaries_are_rejected(model, view):
+    with pytest.raises(BoundaryHookError, match="unique"):
+        BoundaryHookManager(model, view).configure(
+            insertions=("PRE_G1", "PRE_G1")
+        )
 
 
 def test_configure_while_attached_is_rejected(model, view):

@@ -1,43 +1,31 @@
-# Formic default run config - part 1, step 1.
-#
-# This file fully describes an execution. Any run that quotes a number must
-# reference the hash of the config it used (`python -m formic.cli config`).
-#
-# INVARIANT: with this file unmodified, Formic must reproduce Qwen3.8-27B
-# exactly. Every Formic mechanism is a flag below, and every flag is OFF.
-
+# SPEC-01 real-checkpoint proof that registered no-op boundaries are bit-inert.
 formic_config_version: 1
 
 run:
-  name: default
+  name: step1-noop-hooks
   experiment_id: null
   seed: 0
-  seeds: [0, 1, 2]          # >=3 seeds for any decisive measurement
+  seeds: [0, 1, 2]
   deterministic: true
-  notes: "step 1 baseline config"
+  notes: "17 registered insertion hooks, no callbacks"
 
 backbone:
   checkpoint_path: /workspace/Qwen3.8-27B
-  # SPEC-01 is text-only. Qwen3_5ForCausalLM never constructs the vision tower (A7).
   mode: text_only
   dtype: bfloat16
-  # eager keeps masks explicit; it is the audited backend (audit 11).
   attn_implementation: eager
   device_map: auto
   max_memory:
     "0": 40GiB
     cpu: 300GiB
-  strict_inventory: true      # A12, cannot be disabled
+  strict_inventory: true
   assert_no_vision_tower: true
 
-# Plan 2.1 - the checkpoint is thinking-default; the segment stays available.
 thinking:
-  mode: capped                # on | off | capped
+  mode: capped
   cap_tokens: 4096
   log_scratch: true
 
-# Plan 2.2 - control fields are greedy ALWAYS; payload uses checkpoint defaults
-# until the step-3 temperature sweep decides (ADR required to change).
 sampling:
   control: greedy
   payload:
@@ -47,12 +35,27 @@ sampling:
     top_k: 20
   scratch_follows_payload: true
 
-# The 17 group boundaries. Empty lists mean NO hook is registered at all.
 boundaries:
   enabled_observers: []
-  enabled_insertions: []
+  enabled_insertions:
+    - PRE_G1
+    - G1_G2
+    - G2_G3
+    - G3_G4
+    - G4_G5
+    - G5_G6
+    - G6_G7
+    - G7_G8
+    - G8_G9
+    - G9_G10
+    - G10_G11
+    - G11_G12
+    - G12_G13
+    - G13_G14
+    - G14_G15
+    - G15_G16
+    - POST_G16
 
-# Every Formic mechanism, OFF by default (plan rule 3).
 flags:
   snapshot_restore: false
   transaction_engine: false
@@ -68,7 +71,6 @@ flags:
   completion_head: false
   stop_uncertainty_head: false
   instruction_echo_probe: false
-  # part 2 only - must stay false until FORMIC-M1 is validated
   l1_exit_bridge: false
   l0_exit_bridge: false
   route_conditional_lora: false

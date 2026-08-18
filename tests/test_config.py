@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from formic.backbone import constants as C
+from formic.backbone.groups import BOUNDARY_NAMES
 from formic.config.loader import load_config, load_config_dict
 from formic.config.schema import ConfigError, RunConfig
 
@@ -92,11 +93,32 @@ def test_non_bf16_dtype_is_refused():
         load_config_dict({"backbone": {"dtype": "float16"}})
 
 
+def test_multimodal_mode_is_refused_in_spec_01():
+    with pytest.raises(ConfigError):
+        load_config_dict({"backbone": {"mode": "reference_multimodal"}})
+
+
 def test_boundaries_reject_unknown_names():
     with pytest.raises(ConfigError):
         load_config_dict({"boundaries": {"enabled_observers": ["G99_G100"]}})
     config = load_config_dict({"boundaries": {"enabled_observers": ["G4_G5"]}})
     assert config.boundaries.enabled_observers == ("G4_G5",)
+    assert config.identity_mode() is False
+
+
+def test_boundaries_reject_duplicate_names():
+    with pytest.raises(ConfigError, match="duplicate"):
+        load_config_dict(
+            {"boundaries": {"enabled_insertions": ["PRE_G1", "PRE_G1"]}}
+        )
+
+
+def test_noop_hook_config_selects_all_seventeen_boundaries():
+    config = load_config(CONFIGS / "step1_noop_hooks.yaml")
+    assert config.flags.all_off
+    assert config.boundaries.enabled_observers == ()
+    assert len(config.boundaries.enabled_insertions) == C.NUM_BOUNDARIES == 17
+    assert set(config.boundaries.enabled_insertions) == set(BOUNDARY_NAMES)
     assert config.identity_mode() is False
 
 

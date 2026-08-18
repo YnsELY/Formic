@@ -13,9 +13,10 @@ identically during ``generate()``:
   ``_prepare_position_ids_for_generation`` and, in decode, passes ``[1, B, S]``,
   which matches neither branch, so ``text_position_ids`` becomes ``None``.
 
-These tests lock the two facts Formic relies on, so an upstream change surfaces
-as a red test rather than as silent behavioural drift. They are weight-free: only
-the tiny rotary module and the source of the text model are inspected.
+The multimodal distinction is retained as an upstream regression guard, not as
+SPEC-01's active reference path; both current acceptance sides use CausalLM.
+These tests are weight-free: only the tiny rotary module and text-model source
+are inspected.
 """
 
 from __future__ import annotations
@@ -64,9 +65,8 @@ def test_rope_parameters_match_the_audit(text_config):
 def test_rotary_is_indifferent_to_axis_count_on_pure_text(text_config):
     """On text, the three M-RoPE axes are identical, so 1 axis == 3 axes.
 
-    This isolates the step-1 finding: the `generate()` divergence between entry
-    points is NOT caused by the rotary embedding. If this test ever fails, the
-    analysis in reports/step1_report.md section 5.6 must be revisited.
+    This preserves the historical entrypoint finding independently of the active
+    CausalLM-vs-CausalLM SPEC-01 comparison.
     """
     from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedding
 

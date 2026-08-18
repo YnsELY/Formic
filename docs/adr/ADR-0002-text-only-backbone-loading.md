@@ -1,7 +1,7 @@
 # ADR-0002 — Text-only backbone loading via `Qwen3_5ForCausalLM` + key renaming
 
 - **Status:** PROPOSED (needs human sign-off before step 2)
-- **Date:** 2026-08-16
+- **Date:** 2026-08-16 (updated 2026-08-18 for SPEC-01 verification)
 - **Step:** part 1 / step 1
 - **Deciders:** pending
 - **Supersedes / superseded by:** —
@@ -45,8 +45,36 @@ Text-only mode loads **`Qwen3_5ForCausalLM`** with:
 - the strict inventory of `formic/backbone/inventory.py` before and after the
   load, with vision (333) and MTP (15) as *declared, counted* exclusions.
 
-`reference_multimodal` mode keeps the stock `Qwen3_5ForConditionalGeneration`
-and is used only as the reference side of comparison runs.
+SPEC-01 exposes no active multimodal loader. Its direct Hugging Face reference is
+the same stock `Qwen3_5ForCausalLM` class, loaded outside Formic's loader with
+the same text config and prefix rename. This isolates Formic's inventory,
+boundary, and runner integration without constructing a vision tower on either
+side.
+
+### Key-mapping proof
+
+The rename is validated before weight loading as a complete mapping over the
+intentionally loaded checkpoint tensors:
+
+```text
+source namespace: 850 model.language_model.* tensors + lm_head.weight
+target namespace: 850 model.* tensors                  + lm_head.weight
+result:           851 source names -> 851 unique target names
+```
+
+`CheckpointInventory.text_only_name_mapping()` fails on any target collision.
+`text_only_mapping_report()` verifies all of the following independently of the
+post-load comparison:
+
+- source names equal exactly the checkpoint's text + LM-head inventory;
+- target names equal exactly the expected CausalLM parameter names;
+- inversion returns every original source name (bijection in both directions);
+- the regex passed to Hugging Face produces exactly the same target name;
+- shape, BF16 dtype, and parameter count are unchanged for every pair.
+
+`tests/test_inventory.py::test_text_only_key_mapping_is_a_strict_metadata_preserving_bijection`
+runs this proof over all 851 real checkpoint records. No tensor data is split,
+merged, transposed, converted, added, or assigned a new role.
 
 ## Audit constraints engaged
 
@@ -55,11 +83,11 @@ and is used only as the reference side of comparison runs.
   acceptance reports the parameter delta as evidence
   (26,895,998,464 text-only vs 27,356,728,560 multimodal = 460,730,096 = the
   vision tower, exactly the audited figure).
-- **A10** — MTP is never loaded in either mode; its 15 tensors are an explicit
+- **A10** — MTP is never loaded; its 15 tensors are an explicit
   exclusion, verified by count, not silently ignored.
-- **A11** — no cell is re-implemented, subclassed or patched; both entry points
-  are stock HF classes. The renaming touches key *strings*, never tensors: no
-  split, concat, transpose or re-roling.
+- **A11** — no cell is re-implemented, subclassed or patched. The runtime and
+  direct reference both use the stock HF CausalLM class. The renaming touches
+  key *strings*, never tensors.
 - **A12** — permissive loading is impossible: `assert_strict_load` compares the
   loaded parameter set against the checkpoint inventory both ways (missing /
   unexpected / shape / dtype) and fails fatally on any divergence. It also
@@ -80,20 +108,26 @@ and is used only as the reference side of comparison runs.
   (`vision_tower_present == False`), not a promise.
 - The `key_mapping` is Formic's only checkpoint-name transformation, and it lives
   in one place (`CheckpointInventory.key_mapping`) shared by the loader and the
-  expectation set, so the two can never drift apart.
-- Step 2 must prove the equivalence *empirically*, not only by code reading: the
-  identity suite compares Formic text-only against stock
-  `Qwen3_5ForConditionalGeneration` on the frozen prompt set (per-layer hidden
-  states, logits, GDN/KV states, greedy identity). The step-1 acceptance already
-  runs the preliminary version of that comparison.
-- If step 2 ever finds a divergence attributable to the entry point, this ADR is
-  superseded and text-only falls back to the multimodal class with the tower
-  loaded but unused — at the cost of A7.
+  strict expectation set. The full bijection test prevents either side from
+  silently drifting.
+- SPEC-01 compares Formic against a direct stock CausalLM run. Prefill logits are
+  bit-identical on all six frozen prompts (maximum logit delta 0, KL 0, top-1
+  agreement 6/6).
+- Cached generation is not reproducible on the audited CUDA fallback backend:
+  PyTorch reports that `cumsum_cuda_kernel`, used by the stock GDN prefill while
+  constructing recurrent cache state, has no deterministic implementation.
+  Formic does not patch or replace that cell. The preliminary generation
+  criterion therefore remains failed pending a human decision; this ADR remains
+  PROPOSED.
+- SPEC-02, not this ADR or SPEC-01, owns measured numeric tolerances and the
+  blocking identity CI gate.
 
 ## Evidence
 
-- Step-1 acceptance artefacts: `artifacts/step1/step1_report.md`,
-  `formic_outputs.json`, `hf_outputs.json`.
+- SPEC-01 acceptance artefacts: `artifacts/step1/step1_report.md`,
+  `formic_outputs.json`, `hooks_outputs.json`, `hf_outputs.json`.
+- Mapping proof: `tests/test_inventory.py` and the `key_mapping` section of the
+  strict-load report.
 - Audit sources: `02_config_architecture.md` (`language_model_only` inoperative),
   `10_vision_audit.md` (fusion contract), `09_mtp_audit.md` (MTP ignored by the
   runtime), `15_architectural_invariants.md` (loading invariants).

@@ -4,19 +4,18 @@ One line per brick. `À VENIR` / `EN COURS` / `VALIDÉE` / `GELÉE`. A brick bec
 `VALIDÉE` only when its step's exit checklist is green **and** a human has signed
 off. Nothing downstream starts before that (plan rule 1).
 
-> **Current state — step 1: exit checklist run, 6/7 PASS, 1 FAIL — blocking.**
-> Prefill is proven bit-identical between entry points (SHA-256 match, 6/6
-> prompts). Multi-step **decode** diverges heavily (logit deltas 4.8–12.6,
-> starting at generation step 1–2) even in a manual greedy loop that bypasses
-> `generate()` entirely and matches `position_ids=None` on both sides — this
-> is NOT explained by the `generate()`-wrapper position-id issue found earlier
-> (report §5.6), and NOT consistent with the ~1e-5 BF16 rounding noise the
-> audit documents. Root cause is unlocated: likely the KV/GDN **cache update**
-> path itself, not general numerics. Only cache *length* was compared, not
-> cache *content* — that comparison is the immediate next step.
+> **Current state — SPEC-01 preliminary verification: 8/9 PASS, 1 FAIL — blocking.**
+> Formic and a direct stock `Qwen3_5ForCausalLM` produce bit-identical prefill
+> logits on 6/6 prompts (max delta 0, KL 0, top-1 6/6). The strict 851-name
+> checkpoint mapping is bijective, and all 17 registered no-op hooks preserve
+> real-checkpoint logits bit-for-bit in one process. Cached generation is not
+> reproducible (manual 0/4, greedy 0/6, sampled 0/3): the stock GDN fallback
+> uses `cumsum_cuda_kernel`, for which torch 2.4 reports no deterministic CUDA
+> implementation. Formic does not patch or replace the cell (A11).
 > Report: [`reports/step1_report.md`](reports/step1_report.md), artefacts:
-> `artifacts/step1/`. **Step 2 must not start until this is root-caused and
-> the checklist is green** (plan rule 1); ADR-0002 sign-off is blocked on it.
+> `artifacts/step1/`. This is a preliminary verification, not an identity gate;
+> measured tolerances and blocking CI belong to SPEC-02. **SPEC-02 must not start
+> until SPEC-01 is human-validated.** ADR-0002 remains PROPOSED.
 
 Reference documents, in order of authority: the checkpoint audit
 (`/workspace/audits/qwen3_8_27b/`) → `FINAL_TARGET_ARCHITECTURE.md` (CAPE-R) →

@@ -117,6 +117,10 @@ class BoundaryHookManager:
         """Select which boundaries become active. Raises on unknown names."""
         if self.is_attached:
             raise BoundaryHookError("configure() called while hooks are attached; detach() first")
+        if len(set(observers)) != len(observers):
+            raise BoundaryHookError("observer boundary names must be unique")
+        if len(set(insertions)) != len(insertions):
+            raise BoundaryHookError("insertion boundary names must be unique")
         for name in list(observers) + list(insertions):
             self.view.boundary(name)  # raises ValueError on unknown name
         self.observers = tuple(observers)
@@ -134,10 +138,18 @@ class BoundaryHookManager:
 
     def set_observer(self, name: str, fn: ObserverFn) -> None:
         self.view.boundary(name)
+        if name not in self.observers:
+            raise BoundaryHookError(
+                f"observer callback for {name} is not enabled by the run config"
+            )
         self._observer_callbacks[name] = fn
 
     def set_insertion(self, name: str, fn: InsertionFn) -> None:
         self.view.boundary(name)
+        if name not in self.insertions:
+            raise BoundaryHookError(
+                f"insertion callback for {name} is not enabled by the run config"
+            )
         self._insertion_callbacks[name] = fn
 
     # -- lifecycle ---------------------------------------------------------
