@@ -15,7 +15,8 @@ off. Nothing downstream starts before that (plan rule 1).
 > Report: [`reports/step1_report.md`](reports/step1_report.md), artefacts:
 > `artifacts/step1/`. This is a preliminary verification, not an identity gate;
 > measured tolerances and blocking CI belong to SPEC-02. **SPEC-02 must not start
-> until SPEC-01 is human-validated.** ADR-0002 remains PROPOSED.
+> until SPEC-01 is human-validated.** Clean run: `EXP-0007` at implementation
+> commit `4e99e9a`. ADR-0002 remains PROPOSED.
 
 Reference documents, in order of authority: the checkpoint audit
 (`/workspace/audits/qwen3_8_27b/`) → `FINAL_TARGET_ARCHITECTURE.md` (CAPE-R) →

@@ -90,8 +90,11 @@ merged, transposed, converted, added, or assigned a new role.
   key *strings*, never tensors.
 - **A12** — permissive loading is impossible: `assert_strict_load` compares the
   loaded parameter set against the checkpoint inventory both ways (missing /
-  unexpected / shape / dtype) and fails fatally on any divergence. It also
-  asserts untied embeddings (`tie_word_embeddings=false`).
+  unexpected / shape / dtype) and fails fatally on any divergence.
+  `output_loading_info=True` additionally verifies that Transformers populated
+  the target namespace without a missing, unexpected, mismatched, or failed
+  source key outside the declared vision/MTP exclusions. Untied embeddings are
+  asserted (`tie_word_embeddings=false`).
 
 ## Alternatives considered
 

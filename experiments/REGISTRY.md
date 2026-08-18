@@ -10,3 +10,4 @@ Append-only. Generated from `registry.jsonl` - do not edit by hand.
 | EXP-0004 | part1/step1 | SPEC-01 preliminary backbone verification | FAILED | 2026-08-18T06:50:48 | 19455e2b0c63 | 14fee508 | 0 | 5 |
 | EXP-0005 | part1/step1 | SPEC-01 preliminary backbone verification | FAILED | 2026-08-18T07:17:59 | 19455e2b0c63 | 14fee508 | 0 | 5 |
 | EXP-0006 | part1/step1 | SPEC-01 preliminary backbone verification | FAILED | 2026-08-18T07:24:59 | 19455e2b0c63 | 14fee508 | 0 | 5 |
+| EXP-0007 | part1/step1 | SPEC-01 preliminary backbone verification | FAILED | 2026-08-18T08:09:35 | 19455e2b0c63 | 4e99e9a9 | 0 | 5 |

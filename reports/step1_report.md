@@ -31,6 +31,9 @@ Latest preliminary run uses config hash
 `19455e2b0c639dd9c9de967a4566f743d59dc4a241944053511b63c2a97a8ef2`
 and frozen prompt-set hash
 `995c26d31e99faf8fb0902150ab169c4df2132910053f004e29b3043e469c7d6`.
+It was executed from clean implementation commit
+`4e99e9a92f2c0adb95bee1afb4d16150f97d6dc3` and registered as `EXP-0007`
+(artifact-set SHA-256 `e4003397963a531d8318f92a7ebd41eca64d46680c433df303602ab7e1476448`).
 
 ### Strict load and memory
 
@@ -40,6 +43,8 @@ parameters               26,895,998,464 (50.10 GiB BF16)
 matched tensors          851 / 851
 missing / unexpected     0 / 0
 shape / dtype mismatch   0 / 0
+HF missing / unexpected  0 / 0
+HF mismatch / errors     0 / 0
 declared exclusions      MTP: 15 tensors; vision: 333 tensors
 vision module present    false
 MTP module present       false
@@ -130,7 +135,7 @@ same process.
 | A9 | Formic does not inspect or transform K/V cache contents. |
 | A10 | All 15 MTP tensors are named and counted as strict exclusions. |
 | A11 | Groups are a view, hooks touch only the residual stream, and AST/source guards reject cell copies, subclasses, or monkeypatches. |
-| A12 | Header inventory precedes loading; post-load names, shapes, dtypes, and counts are compared both ways and fail hard. |
+| A12 | Header inventory precedes loading; Transformers `loading_info` is fatal outside declared exclusions; post-load names, shapes, dtypes, and counts are compared both ways. |
 
 ## Exit Checklist
 
