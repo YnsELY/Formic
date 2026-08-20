@@ -21,6 +21,9 @@ def test_default_config_file_loads_and_validates():
     assert config.backbone.mode == "text_only"
     assert config.backbone.attn_implementation == "eager"
     assert config.backbone.dtype == "bfloat16"
+    assert config.numerics.cublas_workspace_config == ":4096:8"
+    assert config.numerics.warmup_traces_per_shape == 6
+    assert config.numerics.measured_traces_per_shape == 2
 
 
 def test_default_config_is_identity_mode():
@@ -136,6 +139,15 @@ def test_config_roundtrips_through_yaml():
 
     reloaded = load_config_dict(yaml.safe_load(config_to_yaml(config)))
     assert reloaded.config_hash() == config.config_hash()
+
+
+def test_decode_stability_policy_is_strict():
+    with pytest.raises(ConfigError, match="measured_traces"):
+        load_config_dict({"numerics": {"measured_traces_per_shape": 1}})
+    with pytest.raises(ConfigError, match="cannot be disabled"):
+        load_config_dict({"numerics": {"require_last_two_exact": False}})
+    with pytest.raises(ConfigError, match="cublas_workspace_config"):
+        load_config_dict({"numerics": {"cublas_workspace_config": "invalid"}})
 
 
 def test_reference_prompt_set_is_wellformed():

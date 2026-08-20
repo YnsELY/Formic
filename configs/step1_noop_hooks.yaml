@@ -85,3 +85,14 @@ flags:
 generation:
   max_new_tokens: 128
   eos_token_ids: [248046, 248044]
+
+numerics:
+  cublas_workspace_config: ":4096:8"
+  cudnn_allow_tf32: false
+  cuda_matmul_allow_tf32: false
+  flash_sdp: false
+  mem_efficient_sdp: false
+  math_sdp: true
+  warmup_traces_per_shape: 6
+  measured_traces_per_shape: 2
+  require_last_two_exact: true

@@ -8,15 +8,27 @@ off. Nothing downstream starts before that (plan rule 1).
 > Formic and a direct stock `Qwen3_5ForCausalLM` produce bit-identical prefill
 > logits on 6/6 prompts (max delta 0, KL 0, top-1 6/6). The strict 851-name
 > checkpoint mapping is bijective, and all 17 registered no-op hooks preserve
-> real-checkpoint logits bit-for-bit in one process. Cached generation is not
-> reproducible (manual 0/4, greedy 0/6, sampled 0/3): the stock GDN fallback
-> uses `cumsum_cuda_kernel`, for which torch 2.4 reports no deterministic CUDA
-> implementation. Formic does not patch or replace the cell (A11).
+> real-checkpoint logits bit-for-bit in one process. The original unaligned
+> cached-generation comparison fails (manual 0/4, greedy 0/6, sampled 0/3).
+> The stock GDN fallback uses a CUDA `cumsum` with no deterministic torch 2.4
+> implementation, but follow-up evidence does not attribute the measured logit
+> gap causally to that operation. Formic does not patch or replace the cell (A11).
 > Report: [`reports/step1_report.md`](reports/step1_report.md), artefacts:
 > `artifacts/step1/`. This is a preliminary verification, not an identity gate;
 > measured tolerances and blocking CI belong to SPEC-02. **SPEC-02 must not start
 > until SPEC-01 is human-validated.** Clean run: `EXP-0007` at implementation
-> commit `4e99e9a`. ADR-0002 remains PROPOSED.
+> commit `4e99e9a`. Follow-up `EXP-0008` establishes exact aligned CUDA
+> Formic/HF decode (8/8), exact CPU Formic/HF decode (3/3), and a deterministic
+> execution-ordinal effect shared by Formic and stock HF. Run 2 = run 3 exactly,
+> three one-trace processes are mutually
+> exact, no parameter/buffer/module tensor attribute changes, and three measured
+> post-warmup traces are exact. The candidate `N=6` shape-specific warmup protocol
+> makes each process stable (6/6 prompts), but a rerun with the pinned cuBLAS and
+> SDPA settings still has Formic/HF generation exact on 0/4 manual, 0/6 greedy,
+> and 0/3 sampled prompts across separate processes. This is a deterministic
+> backend effect, not a demonstrated wrapper mismatch or random-noise floor.
+> ADR-0004 is PROPOSED; no statistical criterion or SPEC-02 tolerance is approved.
+> ADR-0002 remains PROPOSED.
 
 Reference documents, in order of authority: the checkpoint audit
 (`/workspace/audits/qwen3_8_27b/`) → `FINAL_TARGET_ARCHITECTURE.md` (CAPE-R) →

@@ -9,3 +9,4 @@ logs/
 *.pt
 *.safetensors
 .DS_Store
+.claude/

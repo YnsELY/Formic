@@ -2,7 +2,7 @@
 
 Plan 2.4: bit-exactness is only required at identical config *and backend*, so
 every run records the backend it actually ran on. This module produces that
-record; nothing here changes numerics by itself.
+record and applies the configured backend policy before CUDA initialization.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from typing import Any
 
 __all__ = [
     "configure_determinism",
+    "prepare_backend_environment",
     "environment_report",
     "git_commit",
     "git_dirty",
@@ -25,13 +26,30 @@ __all__ = [
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def configure_determinism(seed: int, deterministic: bool = True) -> None:
-    """Apply the run's RNG and backend policy before any model execution."""
+def prepare_backend_environment(numerics: Any | None) -> None:
+    """Pin environment variables before torch or a CUDA context is initialized."""
+    if numerics is None:
+        return
+    workspace = numerics.cublas_workspace_config
+    existing = os.environ.get("CUBLAS_WORKSPACE_CONFIG")
+    if existing not in (None, workspace):
+        raise RuntimeError(
+            "CUBLAS_WORKSPACE_CONFIG conflicts with the resolved config: "
+            f"environment={existing!r}, config={workspace!r}"
+        )
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = workspace
+
+
+def configure_determinism(
+    seed: int, deterministic: bool = True, numerics: Any | None = None
+) -> None:
+    """Apply the run's RNG, pinned CUDA backend, and warmup-compatible policy."""
     import random
 
     import numpy as np
     import torch
 
+    prepare_backend_environment(numerics)
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -41,6 +59,12 @@ def configure_determinism(seed: int, deterministic: bool = True) -> None:
     # Benchmarking is not a configured behavior and can select a different
     # convolution algorithm based on timing noise, so it remains disabled.
     torch.backends.cudnn.benchmark = False
+    if numerics is not None and torch.cuda.is_available():
+        torch.backends.cudnn.allow_tf32 = numerics.cudnn_allow_tf32
+        torch.backends.cuda.matmul.allow_tf32 = numerics.cuda_matmul_allow_tf32
+        torch.backends.cuda.enable_flash_sdp(numerics.flash_sdp)
+        torch.backends.cuda.enable_mem_efficient_sdp(numerics.mem_efficient_sdp)
+        torch.backends.cuda.enable_math_sdp(numerics.math_sdp)
 
 
 def git_commit(repo: str | Path | None = None) -> str | None:
@@ -81,7 +105,12 @@ def environment_report() -> dict[str, Any]:
         "git_dirty": git_dirty(),
         "env": {
             key: os.environ[key]
-            for key in ("CUDA_VISIBLE_DEVICES", "PYTORCH_CUDA_ALLOC_CONF", "TOKENIZERS_PARALLELISM")
+            for key in (
+                "CUDA_VISIBLE_DEVICES",
+                "PYTORCH_CUDA_ALLOC_CONF",
+                "TOKENIZERS_PARALLELISM",
+                "CUBLAS_WORKSPACE_CONFIG",
+            )
             if key in os.environ
         },
     }
@@ -103,6 +132,11 @@ def environment_report() -> dict[str, Any]:
             ]
         report["cudnn_deterministic"] = torch.backends.cudnn.deterministic
         report["cudnn_benchmark"] = torch.backends.cudnn.benchmark
+        report["cudnn_allow_tf32"] = torch.backends.cudnn.allow_tf32
+        report["cuda_matmul_allow_tf32"] = torch.backends.cuda.matmul.allow_tf32
+        report["flash_sdp"] = torch.backends.cuda.flash_sdp_enabled()
+        report["mem_efficient_sdp"] = torch.backends.cuda.mem_efficient_sdp_enabled()
+        report["math_sdp"] = torch.backends.cuda.math_sdp_enabled()
         report["deterministic_algorithms"] = torch.are_deterministic_algorithms_enabled()
     except ImportError:  # pragma: no cover
         report["torch"] = None

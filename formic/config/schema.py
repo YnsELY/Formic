@@ -257,6 +257,35 @@ class GenerationSection:
             raise ConfigError("generation.max_new_tokens must be > 0")
 
 
+@dataclass(frozen=True)
+class NumericsSection:
+    """Pinned CUDA backend and cached-decode warmup policy (plan 2.4)."""
+
+    cublas_workspace_config: str = ":4096:8"
+    cudnn_allow_tf32: bool = False
+    cuda_matmul_allow_tf32: bool = False
+    flash_sdp: bool = False
+    mem_efficient_sdp: bool = False
+    math_sdp: bool = True
+    warmup_traces_per_shape: int = 6
+    measured_traces_per_shape: int = 2
+    require_last_two_exact: bool = True
+
+    def validate(self) -> None:
+        if self.cublas_workspace_config not in (":16:8", ":4096:8"):
+            raise ConfigError(
+                "numerics.cublas_workspace_config must be ':16:8' or ':4096:8'"
+            )
+        if self.warmup_traces_per_shape < 0:
+            raise ConfigError("numerics.warmup_traces_per_shape must be >= 0")
+        if self.measured_traces_per_shape < 2:
+            raise ConfigError(
+                "numerics.measured_traces_per_shape must be >= 2 for stability checking"
+            )
+        if not self.require_last_two_exact:
+            raise ConfigError("numerics.require_last_two_exact cannot be disabled")
+
+
 # --------------------------------------------------------------------------
 # Root
 # --------------------------------------------------------------------------
@@ -272,6 +301,7 @@ class RunConfig:
     boundaries: BoundariesSection = field(default_factory=BoundariesSection)
     flags: FlagsSection = field(default_factory=FlagsSection)
     generation: GenerationSection = field(default_factory=GenerationSection)
+    numerics: NumericsSection = field(default_factory=NumericsSection)
 
     def validate(self) -> None:
         if self.formic_config_version != CONFIG_VERSION:

@@ -31,15 +31,16 @@ __all__ = [
     "render_chat_prompt",
     "generate",
     "forward_logits",
+    "forced_cached_decode_logits",
     "set_seed",
 ]
 
 
-def set_seed(seed: int, deterministic: bool = True) -> None:
+def set_seed(seed: int, deterministic: bool = True, numerics: Any | None = None) -> None:
     """Seed every RNG that can influence a run."""
     from formic.science.determinism import configure_determinism
 
-    configure_determinism(seed, deterministic)
+    configure_determinism(seed, deterministic, numerics)
 
 
 @dataclass
@@ -138,7 +139,7 @@ def generate(
     """
     config: RunConfig = handle.config
     seed = config.run.seed if seed is None else seed
-    set_seed(seed, config.run.deterministic)
+    set_seed(seed, config.run.deterministic, config.numerics)
 
     sampling = config.sampling.payload
     do_sample = sampling.do_sample if do_sample is None else do_sample
@@ -276,6 +277,34 @@ def manual_greedy_decode(
         "seconds": time.time() - started,
         "cache_seq_length": int(past.get_seq_length()) if past is not None else 0,
     }
+
+
+@torch.no_grad()
+def forced_cached_decode_logits(
+    handle: BackboneHandle,
+    token_ids: Sequence[int],
+    forced_token_ids: Sequence[int],
+) -> tuple[torch.Tensor, ...]:
+    """Run a fresh-cache decode against a caller-supplied continuation.
+
+    This diagnostic path makes logits comparable after a top-1 difference: both
+    sides receive identical future inputs. It creates the cache through the
+    stock model (A2), never treats ``use_cache`` as read-only (A1), and performs
+    no cache crop, restore, or fork (A3/A4).
+    """
+    if not forced_token_ids:
+        raise ValueError("forced_token_ids must not be empty")
+    device = _input_device(handle)
+    current = torch.tensor([list(token_ids)], dtype=torch.long, device=device)
+    _validate_batch1_no_padding(current)
+    past = None
+    trace: list[torch.Tensor] = []
+    for token_id in forced_token_ids:
+        outputs = handle.model(input_ids=current, past_key_values=past, use_cache=True)
+        past = outputs.past_key_values
+        trace.append(outputs.logits[0, -1].detach().float().cpu())
+        current = torch.tensor([[token_id]], dtype=torch.long, device=device)
+    return tuple(trace)
 
 
 def _input_device(handle: BackboneHandle) -> torch.device:

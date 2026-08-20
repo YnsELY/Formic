@@ -64,6 +64,70 @@ def render_prompts(tokenizer: Any, prompt_set: dict[str, Any], enable_thinking: 
     return rendered
 
 
+def _cached_greedy_trace(model: Any, input_ids: Any, max_new_tokens: int) -> list[Any]:
+    """One fresh-cache trace, retaining logits for the pinned warmup proof."""
+    import torch
+
+    current = input_ids
+    past = None
+    trace = []
+    with torch.no_grad():
+        for _ in range(max_new_tokens):
+            output = model(input_ids=current, past_key_values=past, use_cache=True)
+            past = output.past_key_values
+            logits = output.logits[0, -1].detach().float().cpu()
+            trace.append(logits)
+            next_id = int(torch.argmax(logits).item())
+            current = torch.tensor([[next_id]], dtype=torch.long, device=input_ids.device)
+    return trace
+
+
+def _warm_cached_decode_shape(
+    model: Any, input_ids: Any, config: Any, max_new_tokens: int, *, label: str
+) -> tuple[dict[str, Any], Any]:
+    """Warm a prompt/cache shape and reject a measurement without stable repeats."""
+    import torch
+
+    policy = config.numerics
+    for index in range(policy.warmup_traces_per_shape):
+        _cached_greedy_trace(model, input_ids, max_new_tokens)
+        print(f"[warmup] {label} warm {index + 1}/{policy.warmup_traces_per_shape}")
+    measured = []
+    for index in range(policy.measured_traces_per_shape):
+        measured.append(_cached_greedy_trace(model, input_ids, max_new_tokens))
+        print(f"[warmup] {label} measure {index + 1}/{policy.measured_traces_per_shape}")
+    left, right = measured[-2:]
+    per_step = []
+    for step, (actual, reference) in enumerate(zip(left, right)):
+        delta = torch.abs(actual.double() - reference.double())
+        actual_lp = torch.log_softmax(actual.double(), dim=-1)
+        reference_lp = torch.log_softmax(reference.double(), dim=-1)
+        kl = torch.sum(torch.exp(reference_lp) * (reference_lp - actual_lp))
+        per_step.append(
+            {
+                "step": step,
+                "torch_equal": bool(torch.equal(actual, reference)),
+                "max_abs_logit_delta": float(delta.max().item()),
+                "kl_nats": max(0.0, float(kl.item())),
+                "top1_agree": int(torch.argmax(actual).item()) == int(torch.argmax(reference).item()),
+            }
+        )
+    stable = all(entry["torch_equal"] for entry in per_step)
+    result = {
+        "prompt_length": int(input_ids.shape[-1]),
+        "max_new_tokens": max_new_tokens,
+        "warmup_traces": policy.warmup_traces_per_shape,
+        "measured_traces": policy.measured_traces_per_shape,
+        "last_two_exact": stable,
+        "per_step": per_step,
+    }
+    if policy.require_last_two_exact and not stable:
+        raise RuntimeError(f"cached decode warmup did not stabilize: {result}")
+    # Persist the final measured trace separately from the JSON summary so a
+    # cross-process comparison can retain full per-step logits without bloating it.
+    return result, torch.stack(right)
+
+
 def stage_formic(config_path: Path) -> dict[str, Any]:
     from formic.backbone.boundaries import count_registered_hooks
     from formic.backbone.loader import load_backbone
@@ -79,6 +143,7 @@ def stage_formic(config_path: Path) -> dict[str, Any]:
     prompt_set = load_prompt_set()
     prompts = render_prompts(handle.tokenizer, prompt_set, config.thinking.enable_thinking)
     logits: dict[str, Any] = {}
+    cached_decode_logits: dict[str, Any] = {}
     results: dict[str, Any] = {
         "stage": "formic",
         "verification_status": "preliminary_spec_01",
@@ -88,6 +153,7 @@ def stage_formic(config_path: Path) -> dict[str, Any]:
         "backbone": handle.describe(),
         "hooks_registered": count_registered_hooks(handle.model),
         "forward": {},
+        "cached_decode_stability": {},
         "manual_greedy": {},
         "greedy": {},
         "sampled": {},
@@ -103,6 +169,14 @@ def stage_formic(config_path: Path) -> dict[str, Any]:
             f"sha={forward.logits_sha256[:12]} ({forward.seconds:.1f}s)"
         )
 
+    device = next(handle.model.parameters()).device
+    for prompt in prompts:
+        ids = handle.tokenizer(prompt["text"], return_tensors="pt")["input_ids"].to(device)
+        stability, cached_decode_logits[prompt["id"]] = _warm_cached_decode_shape(
+            handle.model, ids, config, GREEDY_MAX_NEW_TOKENS, label=f"formic/{prompt['id']}"
+        )
+        results["cached_decode_stability"][prompt["id"]] = stability
+
     for prompt in prompts:
         if prompt["id"] not in MANUAL_PROMPT_IDS:
             continue
@@ -112,7 +186,7 @@ def stage_formic(config_path: Path) -> dict[str, Any]:
         )
 
     for prompt in prompts:
-        set_seed(config.run.seed, config.run.deterministic)
+        set_seed(config.run.seed, config.run.deterministic, config.numerics)
         results["greedy"][prompt["id"]] = generate(
             handle,
             prompt["text"],
@@ -141,6 +215,17 @@ def stage_formic(config_path: Path) -> dict[str, Any]:
             "config_hash": results["config_hash"],
             "prompt_set_sha256": results["prompt_set_sha256"],
             "git_commit": results["environment"]["git_commit"],
+        },
+    )
+    _write_tensors(
+        ARTIFACT_DIR / "formic_cached_decode_logits.pt",
+        cached_decode_logits,
+        metadata={
+            "stage": results["stage"],
+            "config_hash": results["config_hash"],
+            "prompt_set_sha256": results["prompt_set_sha256"],
+            "git_commit": results["environment"]["git_commit"],
+            "trace_kind": "last_measured_cached_greedy",
         },
     )
     return results
@@ -226,7 +311,6 @@ def stage_hf_text_reference(config_path: Path) -> dict[str, Any]:
 
     ensure_torch_compat()
 
-    import numpy as np
     import torch
     from transformers import AutoTokenizer, Qwen3_5ForCausalLM
     from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5TextConfig
@@ -239,16 +323,10 @@ def stage_hf_text_reference(config_path: Path) -> dict[str, Any]:
     if backbone_cfg.mode != "text_only" or backbone_cfg.dtype != "bfloat16":
         raise RuntimeError("SPEC-01 HF reference must be text-only BF16")
 
-    def seed_all(value: int) -> None:
-        import random
+    from formic.science.determinism import configure_determinism
 
-        random.seed(value)
-        np.random.seed(value)
-        torch.manual_seed(value)
-        if torch.cuda.is_available():
-            torch.cuda.manual_seed_all(value)
-        torch.backends.cudnn.deterministic = resolved_config.run.deterministic
-        torch.backends.cudnn.benchmark = False
+    def seed_all(value: int) -> None:
+        configure_determinism(value, resolved_config.run.deterministic, resolved_config.numerics)
 
     seed_all(resolved_config.run.seed)
 
@@ -283,6 +361,7 @@ def stage_hf_text_reference(config_path: Path) -> dict[str, Any]:
         tokenizer, prompt_set, resolved_config.thinking.enable_thinking
     )
     logits_artifact: dict[str, Any] = {}
+    cached_decode_logits: dict[str, Any] = {}
     results: dict[str, Any] = {
         "stage": "hf_text_reference",
         "verification_status": "preliminary_spec_01",
@@ -295,6 +374,7 @@ def stage_hf_text_reference(config_path: Path) -> dict[str, Any]:
         "parameters": sum(parameter.numel() for parameter in model.parameters()),
         "has_vision_tower": False,
         "forward": {},
+        "cached_decode_stability": {},
         "manual_greedy": {},
         "greedy": {},
         "sampled": {},
@@ -317,6 +397,17 @@ def stage_hf_text_reference(config_path: Path) -> dict[str, Any]:
                 "logits_sha256": hashlib.sha256(logits.numpy().tobytes()).hexdigest(),
                 "seconds": seconds,
             }
+
+        for prompt in prompts:
+            ids = tokenizer(prompt["text"], return_tensors="pt")["input_ids"].to(device)
+            stability, cached_decode_logits[prompt["id"]] = _warm_cached_decode_shape(
+                model,
+                ids,
+                resolved_config,
+                GREEDY_MAX_NEW_TOKENS,
+                label=f"hf/{prompt['id']}",
+            )
+            results["cached_decode_stability"][prompt["id"]] = stability
 
         for prompt in prompts:
             if prompt["id"] not in MANUAL_PROMPT_IDS:
@@ -413,6 +504,17 @@ def stage_hf_text_reference(config_path: Path) -> dict[str, Any]:
             "git_commit": results["environment"]["git_commit"],
         },
     )
+    _write_tensors(
+        ARTIFACT_DIR / "hf_cached_decode_logits.pt",
+        cached_decode_logits,
+        metadata={
+            "stage": results["stage"],
+            "config_hash": results["config_hash"],
+            "prompt_set_sha256": results["prompt_set_sha256"],
+            "git_commit": results["environment"]["git_commit"],
+            "trace_kind": "last_measured_cached_greedy",
+        },
+    )
     return results
 
 
@@ -470,6 +572,13 @@ def stage_compare(config_path: Path, hooks_config_path: Path) -> dict[str, Any]:
     )
     if not expected_prompt_ids or any(prompt_ids != expected_prompt_ids for prompt_ids in prompt_sets):
         raise RuntimeError("acceptance artifacts have missing or extra prompt results")
+
+    for stage_name, payload in (("formic", formic), ("hf", reference)):
+        stability = payload.get("cached_decode_stability", {})
+        if set(stability) != all_prompt_ids or not all(
+            entry["last_two_exact"] for entry in stability.values()
+        ):
+            raise RuntimeError(f"{stage_name} cached-decode warmup stability proof failed")
 
     for tensor_artifact, stage in (
         (formic_tensor_artifact, "formic"),
@@ -935,6 +1044,11 @@ def _backend_signature(environment: dict[str, Any]) -> str:
         "gpus",
         "cudnn_deterministic",
         "cudnn_benchmark",
+        "cudnn_allow_tf32",
+        "cuda_matmul_allow_tf32",
+        "flash_sdp",
+        "mem_efficient_sdp",
+        "math_sdp",
         "deterministic_algorithms",
         "torch_compat",
         "env",
@@ -1112,6 +1226,12 @@ def main() -> int:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--hooks-config", type=Path, default=HOOKS_CONFIG)
     args = parser.parse_args()
+    # `--stage all` launches child Python processes. Set cuBLAS before spawning
+    # them, before either child imports torch or initializes CUDA.
+    from formic.config.loader import load_config
+    from formic.science.determinism import prepare_backend_environment
+
+    prepare_backend_environment(load_config(args.config).numerics)
 
     if args.stage == "all":
         for stage in ("formic", "hooks", "hf", "compare"):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from formic.backbone.runner import _validate_batch1_no_padding
+from formic.backbone.runner import _validate_batch1_no_padding, forced_cached_decode_logits
 
 
 def test_batch_one_without_padding_is_accepted():
@@ -28,3 +28,8 @@ def test_padding_is_rejected():
 def test_mismatched_attention_mask_is_rejected():
     with pytest.raises(ValueError, match="does not match"):
         _validate_batch1_no_padding(torch.tensor([[1, 2]]), torch.tensor([[1]]))
+
+
+def test_forced_cached_decode_rejects_an_empty_continuation():
+    with pytest.raises(ValueError, match="must not be empty"):
+        forced_cached_decode_logits(object(), (1, 2), ())

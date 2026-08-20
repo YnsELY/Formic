@@ -27,7 +27,7 @@ training, new token, transaction runtime, or active multimodal path was added.
 
 ## Measurements
 
-Latest preliminary run uses config hash
+The last clean preliminary run uses config hash
 `19455e2b0c639dd9c9de967a4566f743d59dc4a241944053511b63c2a97a8ef2`
 and frozen prompt-set hash
 `995c26d31e99faf8fb0902150ab169c4df2132910053f004e29b3043e469c7d6`.
@@ -106,6 +106,30 @@ token divergence. Replacing or patching it would modify the stock cell/backend
 and is forbidden by A11 and SPEC-01. The generation checklist item remains
 failed rather than being weakened silently.
 
+### Candidate warmup-protocol rerun
+
+An exploratory rerun on 2026-08-18 used candidate config hash
+`ac4b4adfaa98d5454d57853ddd2d51f419cab56d9aabbafb5505bc9994f44634` with
+`CUBLAS_WORKSPACE_CONFIG=:4096:8` set before each process imports Torch,
+TF32 disabled, Flash and memory-efficient SDPA disabled, and math SDPA enabled.
+For every one of the six prompt/cache shapes, each implementation performed six
+unmeasured fresh-cache traces followed by two measured traces.
+
+| Check | Result |
+|---|---:|
+| Formic last-two measured traces exact | 6/6 prompts |
+| Direct HF last-two measured traces exact | 6/6 prompts |
+| Formic/HF prefill logit SHA equality | 6/6 prompts |
+| Explicit greedy cache loop | 0/4 |
+| Native greedy `generate()` | 0/6 |
+| Native sampled `generate()` | 0/3 |
+
+The protocol establishes within-process stability, but not equality between the
+two independently initialized CUDA processes. The run was intentionally not a
+formal acceptance: its implementation worktree was dirty, so `--stage compare`
+correctly refused to emit a verdict. It reinforces the existing 8/9 failure;
+it does not create an `EXP` registry result or start SPEC-02.
+
 ### Real-checkpoint boundary inertness
 
 The hook stage loads the real checkpoint once, computes six baseline forwards,
@@ -164,6 +188,12 @@ gate. No blocking tolerance or formal identity claim has been introduced.
 - Stop/resume at group boundaries was not implemented, per validated scope; only
   the 17 inert boundaries exist.
 - ADR-0002 remains PROPOSED pending human validation.
-- A human decision is required on the cached-generation criterion because the
-  stock audited CUDA fallback cannot provide deterministic GDN cumsum. SPEC-02
-  must not start while SPEC-01 remains unvalidated.
+- ADR-0004 is PROPOSED; no statistical criterion has been accepted. Follow-up
+  `EXP-0008` establishes exact aligned CUDA Formic/HF decode, exact CPU
+  Formic/HF decode, a deterministic first-execution effect, unchanged model
+  tensor state, and exact post-warmup repeats; see
+  `reports/step1_decode_diagnostics.md`. The candidate `N=6` warmup acceptance
+  rerun stabilizes each process but retains 0/13 Formic/HF generation equality
+  across processes. This does not retroactively turn the preliminary generation
+  checklist green: SPEC-01 remains 8/9, and SPEC-02 must not start while
+  SPEC-01 remains unvalidated.

@@ -105,7 +105,7 @@ def load_backbone(config: RunConfig, *, verbose: bool = True) -> BackboneHandle:
     from formic.science.determinism import configure_determinism
 
     config.validate()
-    configure_determinism(config.run.seed, config.run.deterministic)
+    configure_determinism(config.run.seed, config.run.deterministic, config.numerics)
     backbone_cfg = config.backbone
     path = Path(backbone_cfg.checkpoint_path)
     if not path.is_dir():
