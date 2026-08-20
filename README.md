@@ -1,337 +1,335 @@
 # Formic
 
-**Formic** est un modèle d'exécution spécialisé pour l'ingénierie logicielle.
-Il constitue le composant neural d'exécution du projet **Uly Code**, un système
-agentique conçu pour réaliser des tâches de software engineering de manière
-fiable, contrôlée et vérifiable.
+**Formic** is an execution model specialized for software engineering. It is the
+neural execution component of **Uly Code**, an agentic system designed to carry
+out software-engineering tasks reliably, controllably, and with verifiable
+results.
 
-Formic n'est pas conçu, dans un premier temps, comme un assistant conversationnel
-généraliste autonome. Il est conçu pour recevoir une tâche déjà comprise,
-diagnostiquée et cadrée par le système Uly Code, puis pour la transformer en une
-suite d'actions logicielles correctes, limitées et vérifiées.
+Formic is not initially intended to be a general-purpose autonomous
+conversation assistant. It is designed to receive a task that has already been
+understood, diagnosed, and scoped by Uly Code, then turn that task into a series
+of correct, bounded, and verified software actions.
 
-## Uly Code et Formic
+## Uly Code and Formic
 
-Uly Code est le système agentique global. Il sépare deux responsabilités qui
-sont souvent mélangées dans les agents de programmation actuels :
+Uly Code is the overall agentic system. It separates two responsibilities that
+are often combined in current coding agents:
 
 ```text
-Modèle d'orchestration
-    comprendre le problème
-    enquêter dans le dépôt
-    diagnostiquer la cause
-    définir la stratégie globale
-    découper le travail
-              |
-              v
-Tâche précise, contrainte et vérifiable
-              |
-              v
+Frontier orchestration model
+    understand the problem
+    investigate the repository
+    diagnose the cause
+    define the global strategy
+    decompose the work
+                |
+                v
+Precisely scoped, constrained, verifiable task
+                |
+                v
 Formic
-    comprendre la tâche cadrée
-    lire les preuves utiles
-    décider localement
-    produire une action typée
-    vérifier et corriger
-    terminer avec des preuves
+    understand the scoped task
+    read the relevant evidence
+    make local decisions
+    produce a typed action
+    verify and repair
+    finish with evidence
 ```
 
-Le modèle d'orchestration est responsable de l'investigation ouverte et de la
-stratégie générale. **Formic est le modèle d'exécution** : il reçoit un objectif
-déjà défini, les contraintes applicables, le contexte nécessaire et les critères
-de réussite, puis il agit avec discipline.
+The orchestration model is responsible for open-ended investigation, difficult
+reasoning, discovery, and global strategy. **Formic is the execution model**:
+it receives a defined objective, the applicable constraints, the necessary
+context, and the success criteria, then executes with discipline.
 
-Cette séparation est le principe fondateur du projet :
+This separation is the central principle of the project:
 
-- le modèle d'orchestration cherche et comprend le problème;
-- Formic exécute la tâche avec fidélité;
-- le système Uly Code conserve l'état, applique les règles et vérifie les
-  résultats;
-- aucune déclaration du modèle ne suffit à elle seule à considérer une tâche
-  comme terminée.
+- the orchestration model finds and understands the problem;
+- Formic executes the task faithfully;
+- Uly Code stores state, applies rules, and verifies results;
+- no model statement alone is sufficient to mark a task as complete.
 
-Formic est donc conçu, dans un premier temps, **spécifiquement pour le système
-agentique Uly Code**. Ses interfaces, ses contraintes et son architecture sont
-définies autour de ce rôle d'exécuteur.
+Formic is therefore designed, initially and specifically, for the **Uly Code
+agentic system**. Its interfaces, constraints, and architecture are defined
+around this executor role.
 
-## Le problème à résoudre
+## Training Objective
 
-Les agents de programmation actuels sont généralement construits autour d'un
-modèle conversationnel entouré d'une boucle de prompts et d'outils. Cette
-approche est utile, mais elle présente des faiblesses structurelles sur les
-tâches longues ou sensibles :
+The purpose of training Formic is to create a model that can perform code
+generation and long, complex software-engineering tasks that are **fully and
+precisely scoped** at the same practical level as very large frontier models.
 
-- les instructions importantes se mélangent avec le contenu du dépôt et les
-  sorties d'outils;
-- les contraintes peuvent être oubliées, diluées ou contredites au fil du
-  contexte;
-- l'état du travail reste souvent implicite dans l'historique conversationnel;
-- le raisonnement peut devenir trop long, redondant ou hors sujet;
-- les modifications sont produites sous forme de texte libre, sans garantie
-  structurelle sur leur portée;
-- le modèle peut déclarer qu'il a terminé sans preuve externe suffisante;
-- les échecs, les reprises et les décisions précédentes sont difficiles à
-  représenter de manière fiable.
+The training target is practical parity with frontier models for execution:
+Formic should deliver comparable reliability and comparable code and output
+quality on a perfectly framed task, even though it is much smaller and much less
+expensive to run.
 
-Uly Code et Formic cherchent à remplacer cette logique de conversation ouverte
-par une logique d'exécution structurée : une tâche cadrée, une action limitée,
-une validation déterministe et un état versionné.
+For those well-defined tasks, Formic should approach frontier-model quality in:
 
-## L'objectif de Formic
+- execution reliability;
+- code and output quality;
+- instruction fidelity;
+- strict scope adherence;
+- understanding of the provided repository context;
+- verification and local error correction;
+- long-horizon task completion;
+- completion awareness;
+- consistency and controllability.
 
-L'objectif est de construire un modèle capable de réaliser une tâche de
-software engineering bien spécifiée avec :
+The target is not to build a smaller general-purpose problem solver. Formic is
+not intended to discover the solution to an open-ended problem, investigate an
+unknown repository from scratch, choose a global strategy, or replace a
+frontier-scale reasoning model. Those responsibilities belong to the Uly Code
+orchestrator.
 
-- une forte fidélité aux instructions;
-- une stricte adhérence au périmètre demandé;
-- des modifications minimales et justifiées;
-- une compréhension suffisante du code et des dépendances locales;
-- une capacité de vérification et de correction;
-- une gestion explicite des erreurs et des reprises;
-- une détection fiable de la fin réelle de la tâche;
-- un raisonnement proportionné à la difficulté;
-- une exécution reproductible et contrôlable;
-- une latence et une consommation de calcul raisonnables.
+The objective is narrower and deliberate: **perform a perfectly framed task as
+well as a much larger frontier model, while using substantially less inference
+compute and therefore costing much less to run.**
 
-Le terme **executor** ne signifie pas que Formic est dépourvu de raisonnement.
-Formic doit comprendre la tâche, analyser les conséquences d'une modification,
-raisonner sur les contraintes, choisir une action, vérifier son travail et
-revenir sur une décision si de nouvelles preuves le nécessitent.
-
-La différence est que ce raisonnement doit servir directement l'exécution. Il ne
-doit pas devenir une investigation globale sans fin ni une conversation qui
-remplace l'action.
-
-## Le modèle d'exécution visé
-
-Le projet ne cherche pas simplement à ajouter un prompt spécialisé à un grand
-modèle existant. La cible, appelée **CAPE-R** (*Contract-Aware Progressive
-Executor, Revised*), change l'unité fondamentale de travail :
+Uly Code combines both capabilities:
 
 ```text
-Contrat d'instructions fiable
-        +
-État versionné et typé
-        +
-Preuves sélectionnées du dépôt
-        |
-        v
-Décision neural bornée
-        |
-        v
-Une action typée ou une proposition d'état
-        |
-        v
-Validation déterministe et preuves externes
-        |
-        +--> commit atomique
-        |
-        +--> rejet sans effet de bord
+Large frontier model
+    discovery, investigation, deep reasoning, global planning
+                +
+Formic
+    reliable, high-quality, low-cost execution
+                =
+Frontier-level software-engineering outcomes
+at a substantially lower execution cost
 ```
 
-Une tâche longue devient une séquence de transactions d'exécution, et non un
-unique décodage conversationnel qui accumule tout l'historique.
+The distinction between an orchestrator and an executor is essential. Formic is
+not meant to reason less in the sense of being incapable of reasoning. It must
+still understand a task, analyze the consequences of a change, reason about
+constraints, choose an action, verify its work, and correct errors. Its
+reasoning must serve execution rather than open-ended discovery.
 
-Chaque transaction doit :
+## The Target Execution Model
 
-1. lire un contrat d'instructions immuable et versionné;
-2. lire un état externe et typé;
-3. recevoir uniquement les éléments de preuve nécessaires;
-4. produire une action principale bornée;
-5. faire valider cette action par les règles du système;
-6. l'appliquer dans un environnement contrôlé;
-7. vérifier le résultat;
-8. committer un nouvel état ou rejeter l'action sans effet de bord.
+The project is not simply adding a specialized prompt to an existing large
+model. The target architecture, called **CAPE-R** (*Contract-Aware Progressive
+Executor, Revised*), changes the fundamental unit of work:
 
-La complétion n'est donc pas uniquement une phrase produite par le modèle. Elle
-est une prédiction qui doit être confirmée par des preuves déterministes : tests,
-analyse syntaxique, vérification de périmètre, état du dépôt et autres contrôles
-applicables.
+```text
+Trusted instruction contract
+        +
+Versioned, typed state
+        +
+Selected repository evidence
+        |
+        v
+Bounded neural decision
+        |
+        v
+One typed action or state proposal
+        |
+        v
+Deterministic validation and external evidence
+        |
+        +--> atomic commit
+        |
+        +--> rejection without side effects
+```
 
-## Les quatre plans de l'architecture
+A long task becomes a sequence of execution transactions rather than one
+conversation that accumulates the entire task history in a single decode.
 
-La cible CAPE-R organise le système en quatre plans complémentaires.
+Each transaction must:
 
-### Plan de contrôle
+1. read an immutable, versioned instruction contract;
+2. read external, typed state;
+3. receive only the evidence that it needs;
+4. produce one bounded primary action;
+5. have that action checked against the system rules;
+6. apply it in a controlled environment;
+7. verify the result;
+8. commit a new state or reject the action without side effects.
 
-Le plan de contrôle contient le contrat d'instructions (`ContractIR`) : objectifs,
-contraintes, autorité, périmètre, critères de réussite et règles applicables.
-Un moniteur de référence non neural vérifie que les actions proposées respectent
-ce contrat. Il peut refuser une action, mais il n'invente pas lui-même une
-solution.
+Completion is therefore not only a sentence produced by the model. It is a
+prediction that must be confirmed by deterministic evidence: tests, parsing,
+scope checks, repository state, and any other applicable validation.
 
-### Plan d'état
+## The Four Architectural Planes
 
-Le plan d'état, appelé **State Fabric**, conserve les informations durables :
+The CAPE-R target architecture is organized into four complementary planes.
 
-- snapshot du dépôt;
-- fichiers, symboles et relations importantes;
-- graphe des obligations de la tâche;
-- preuves collectées;
-- échecs et tentatives précédentes;
-- transitions d'état;
-- journal append-only des décisions et validations.
+### Control Plane
 
-L'état durable ne dépend pas du contenu fragile d'un cache neural ou d'une longue
+The control plane contains the instruction contract (`ContractIR`): objectives,
+constraints, authority, scope, success criteria, and applicable rules. A
+non-neural reference monitor checks whether proposed actions comply with this
+contract. It may reject an action, but it does not invent one.
+
+### State Plane
+
+The state plane, called the **State Fabric**, stores durable information:
+
+- repository snapshots;
+- important files, symbols, and relationships;
+- the task obligation graph;
+- collected evidence;
+- previous failures and attempts;
+- state transitions;
+- an append-only record of decisions and validations.
+
+Durable state does not depend on fragile neural-cache contents or an ever-growing
 conversation.
 
-### Plan d'exécution
+### Execution Plane
 
-Le plan d'exécution réutilise le tronc Qwen conservé dans Formic. Il reçoit le
-contrat, l'état et les preuves nécessaires, puis produit une décision structurée
-au moyen d'une grammaire et de sorties typées plutôt qu'une simple réponse libre.
+The execution plane reuses the Qwen trunk preserved by Formic. It receives the
+contract, state, and relevant evidence, then produces a structured decision
+through typed outputs and a constrained grammar rather than only free-form text.
 
-À terme, l'architecture pourra contrôler la profondeur de calcul à des frontières
-naturelles du modèle. Cette capacité est volontairement différée jusqu'à ce que
-la base complète soit mesurée et validée.
+In the longer-term architecture, the system may control the amount of neural
+computation at natural model boundaries. This capability is deliberately
+deferred until the full-depth foundation has been measured and validated.
 
-### Plan de commit
+### Commit Plane
 
-Le plan de commit vérifie la forme, le périmètre, les hashes, les tests, les
-parseurs, les types et les autres critères applicables. Il applique la
-modification dans un environnement contrôlé, puis committe atomiquement ou
-rejette l'action.
+The commit plane checks shape, scope, hashes, tests, parsers, types, and all
+other applicable criteria. It applies a modification in a controlled environment
+and then atomically commits or rejects the action.
 
-## Pourquoi partir de Qwen3.8-27B ?
+## Why Start from Qwen3.8-27B?
 
-Formic ne préentraîne pas un modèle depuis zéro. Le projet utilise le checkpoint
-Qwen3.8-27B comme substrat neural, parce qu'il fournit une base forte pour le
-code, le raisonnement et les usages agentiques.
+Formic is not pretrained from scratch. The project uses the Qwen3.8-27B
+checkpoint as its neural substrate because it provides a strong foundation for
+code, reasoning, and agentic workloads.
 
-Le checkpoint possède notamment :
+The checkpoint includes, among other properties:
 
-- environ 27 milliards de paramètres;
-- 64 couches de décodeur;
-- 16 groupes hybrides;
-- une alternance vérifiée de trois couches Gated DeltaNet et d'une couche de
-  full attention par groupe;
-- un contexte natif très large;
-- une architecture adaptée à l'étude du calcul adaptatif et de l'état
-  séquentiel.
+- approximately 27 billion parameters;
+- 64 decoder layers;
+- 16 hybrid groups;
+- a verified pattern of three Gated DeltaNet layers followed by one full-attention
+  layer in each group;
+- a very large native context;
+- an architecture suitable for studying adaptive computation and sequential
+  state.
 
-Le projet ne considère toutefois pas ces propriétés comme des hypothèses. Le
-checkpoint a été audité avant l'implémentation, et les décisions d'architecture
-doivent respecter ce que l'audit a effectivement établi.
+These properties are not treated as assumptions. The checkpoint was audited
+before implementation, and architectural decisions must respect what the audit
+actually established.
 
-## Discipline de réutilisation des poids
+## Weight-Reuse Discipline
 
-La règle fondamentale de Formic est :
+Formic follows a strict invariant:
 
 ```text
-tous les mécanismes Formic désactivés == comportement du Qwen d'origine
+all Formic mechanisms disabled == original Qwen behavior
 ```
 
-Cela implique notamment :
+This means that:
 
-- les cellules Qwen ne sont pas réimplémentées;
-- les cellules Qwen ne sont pas copiées puis modifiées;
-- les équations, poids, normalisations et ordres résiduels sont conservés;
-- le chargement des tenseurs est strict et vérifié dans les deux directions;
-- la tour vision n'est pas construite dans le chemin text-only;
-- les hooks et frontières sont désactivés par défaut;
-- toute nouvelle capacité est ajoutée autour du tronc et placée derrière une
-  configuration désactivée par défaut;
-- une mesure citée doit conserver son environnement, sa configuration, son
-  seed, son commit et son identifiant d'expérience.
+- Qwen cells are not reimplemented;
+- Qwen cells are not copied and modified;
+- equations, weights, normalization, and residual ordering are preserved;
+- tensor loading is strict and checked in both directions;
+- the vision tower is not constructed in the text-only path;
+- hooks and boundaries are disabled by default;
+- every new capability is added around the trunk and placed behind a
+  configuration flag disabled by default;
+- every quoted measurement retains its environment, configuration, seed, commit,
+  and experiment identifier.
 
-Cette discipline permet de distinguer deux choses :
+This discipline makes it possible to distinguish between:
 
-- le comportement du modèle de base;
-- les capacités ajoutées par l'architecture Formic.
+- the behavior of the base model;
+- the capabilities added by the Formic architecture.
 
-## Comment le projet sera construit
+## How the Project Will Be Built
 
-Le développement suit huit étapes strictement ordonnées. Une étape ne doit pas
-être considérée comme validée sans tests, rapport, état documenté et validation
-humaine lorsque cela est requis.
+Development follows eight strictly ordered steps. A step is not considered
+validated without tests, a report, documented status, and human validation where
+required.
 
-### Partie 1 : construire les fondations
+### Part 1: Foundations
 
-1. **Fondation Formic et intégration du backbone** : dépôt, configuration,
-   registre scientifique, chargement strict et vue testable des groupes Qwen.
-2. **Identité et tolérances numériques** : baseline bloquante, mesure de la
-   reproductibilité et primitives de snapshot/restore.
-3. **Évaluation et baselines** : suites de tests figées, métriques, seeds et
-   baselines reproductibles.
-4. **Moteur transactionnel full-depth** : `ContractIR`, State Fabric, moteur de
-   transactions et moniteur de référence.
-5. **Actions logicielles typées** : édition, appel d'outil, mise à jour d'état,
-   question, abstention et complétion, avec validation et sandbox.
-6. **Première boucle de bout en bout et FORMIC-M0** : exécuter de petites tâches
-   logicielles complètes et mesurer le gain du runtime seul.
-7. **Production d'épisodes** : industrialiser les épisodes d'exécution annotés
-   qui serviront à l'entraînement.
-8. **Premiers sidecars neuraux et FORMIC-M1** : ajouter de petits composants
-   spécialisés, garder le tronc gelé et vérifier chaque gain par ablation.
+1. **Formic foundation and backbone integration**: repository, configuration,
+   scientific registry, strict loading, and a testable view of the Qwen groups.
+2. **Identity and numerical tolerances**: blocking baseline, reproducibility
+   measurements, and snapshot/restore primitives.
+3. **Evaluation and baselines**: frozen suites, metrics, seeds, and reproducible
+   baselines.
+4. **Full-depth transaction engine**: `ContractIR`, State Fabric, transaction
+   engine, and reference monitor.
+5. **Typed software actions**: edits, tool calls, state updates, questions,
+   abstention, and completion, with validation and sandboxing.
+6. **First end-to-end loop and FORMIC-M0**: run small, complete software tasks
+   and measure the benefit of the runtime alone.
+7. **Episode production**: industrialize labeled execution episodes for training.
+8. **First neural sidecars and FORMIC-M1**: add small specialized components,
+   keep the trunk frozen, and verify every gain through ablation.
 
-### Partie 2 : capacités avancées, volontairement différées
+### Part 2: Advanced Capabilities, Deliberately Deferred
 
-La partie 2 n'est pas commencée. Elle viendra seulement après une base mesurée
-et validée. Elle pourra inclure :
+Part 2 has not started. It will begin only after a measured and validated
+foundation. It may include:
 
-- sorties à profondeur progressive;
-- routage appris;
-- budgets de réflexion et de scratch;
-- décision apprise « continuer à raisonner ou agir »;
-- décodage spéculatif;
-- rollback contrôlé des états GDN;
-- intégration MTP;
-- tâches longues et entraînement outcome/preference;
+- progressive-depth exits;
+- learned routing;
+- thinking and scratch budgets;
+- a learned "continue reasoning or act" decision;
+- speculative decoding;
+- controlled GDN state rollback;
+- MTP integration;
+- long-horizon tasks and outcome/preference training;
 - reinforcement learning;
-- serving multi-GPU et chemin vision.
+- multi-GPU serving and the vision path.
 
-Ces capacités ne sont pas supprimées du projet. Elles sont séquencées après les
-fondations pour éviter de construire des mécanismes avancés sur une baseline
-non mesurée.
+These capabilities have not been removed from the project. They are sequenced
+after the foundations so that advanced mechanisms are not built on an unmeasured
+baseline.
 
-## Où en est le projet ?
+## Current Status
 
-Le dépôt est actuellement dans la première étape de la partie 1.
+The repository is currently in the first step of Part 1.
 
-### Éléments déjà disponibles
+### Available Today
 
-- structure du dépôt et conventions scientifiques;
-- schéma de configuration strict;
-- registre d'expériences `EXP-...`;
-- chargement text-only BF16 du checkpoint;
-- inventaire strict des tenseurs;
-- mapping bijectif des poids;
-- vue des 16 groupes hybrides;
-- 17 frontières inertes;
-- runner de génération native;
-- contrôles de déterminisme et rapports d'expérience;
-- tests weight-free et garde-fous A11/A12.
+- repository structure and scientific conventions;
+- strict run-configuration schema;
+- `EXP-...` experiment registry;
+- text-only BF16 checkpoint loading;
+- strict tensor inventory;
+- bijective weight mapping;
+- the 16-group hybrid view;
+- 17 inert boundaries;
+- a native generation runner;
+- determinism controls and experiment reports;
+- weight-free tests and A11/A12 safeguards.
 
-### État de la validation du backbone
+### Backbone Validation Status
 
-La vérification préliminaire de SPEC-01 est à **8/9** :
+The preliminary SPEC-01 verification is currently **8/9**:
 
-- le prefill Formic/HF est bit-identique sur les six prompts;
-- le chargement strict et la structure du modèle sont validés;
-- les hooks no-op sont bit-inertes;
-- Formic et HF sont exacts dans plusieurs contrôles alignés;
-- une divergence de décodage CUDA avec cache reste observée entre certaines
-  exécutions indépendantes.
+- Formic/HF prefill is bit-identical on six prompts;
+- strict loading and model structure are validated;
+- no-op hooks are bit-inert;
+- Formic and HF are exact in several aligned controls;
+- a cached CUDA decode divergence remains visible across some independent
+  executions.
 
-Les diagnostics disponibles indiquent que cette divergence est très probablement
-liée à un effet déterministe d'ordinal ou d'initialisation du backend CUDA/GDN,
-et non à un défaut logique démontré du wrapper Formic. Le même phénomène est
-observable avec le modèle Hugging Face stock, et Formic et HF redeviennent
-bit-identiques lorsque leurs conditions d'exécution sont correctement alignées.
+Available diagnostics indicate that this divergence is most likely related to a
+deterministic execution-ordinal or initialization effect in the CUDA/GDN
+backend, rather than a demonstrated logical defect in the Formic wrapper. The
+same effect is observable with stock Hugging Face, and Formic and HF become
+bit-identical when their execution conditions are properly aligned.
 
-Cette conclusion permet de poursuivre le développement de Formic, mais ne
-transforme pas automatiquement la vérification 8/9 en validation formelle 9/9.
-La reproductibilité inter-processus CUDA et la définition des tolérances restent
-documentées comme une question ouverte.
+This conclusion allows Formic development to continue, but it does not
+automatically turn the 8/9 verification into a formal 9/9 pass. Cross-process
+CUDA reproducibility and the definition of numerical tolerances remain documented
+open questions.
 
-Voir [`STATUS.md`](STATUS.md) et le [rapport de clôture de l'analyse de
-divergence](reports/step1_formic_hf_divergence_conclusion.md) pour le détail des
-mesures, des limites et de la décision recommandée.
+See [`STATUS.md`](STATUS.md) and the [divergence analysis closing
+report](reports/step1_formic_hf_divergence_conclusion.md) for the detailed
+measurements, limitations, and recommended decision.
 
-## Démarrage rapide
+## Quick Start
 
-Les commandes suivantes vérifient le projet sans charger les poids, et prennent
-quelques secondes :
+The following commands verify the project without loading the model weights and
+complete in seconds:
 
 ```bash
 export PYTHONPATH=$PWD
@@ -344,8 +342,7 @@ python -m formic.cli env
 python -m pytest tests/ -q
 ```
 
-Les commandes qui chargent le checkpoint nécessitent l'environnement et le
-fichier de poids local :
+Commands that load the checkpoint require the local environment and checkpoint:
 
 ```bash
 python -m formic.cli load
@@ -353,72 +350,74 @@ python -m formic.cli generate --prompt "..." --chat
 python scripts/step1_acceptance.py --stage all
 ```
 
-Le chargement du modèle nécessite plusieurs dizaines de gigaoctets de mémoire
-et peut prendre plusieurs minutes. Les mesures décisives doivent utiliser le
-checkpoint, la configuration et l'environnement documentés dans les rapports.
+Model loading requires several dozen gigabytes of memory and may take several
+minutes. Decisive measurements must use the checkpoint, configuration, and
+environment documented in the reports.
 
-## Organisation du dépôt
+## Repository Layout
 
 ```text
 formic/
-├── formic/                package Python principal
-│   ├── backbone/          checkpoint, groupes, frontières, runner
-│   ├── config/            schéma et chargement de configuration
-│   ├── science/           déterminisme, environnement, registre d'expériences
-│   ├── runtime/           moteur transactionnel à venir
-│   ├── contracts/         ContractIR et compilateur à venir
-│   ├── state/             State Fabric à venir
-│   ├── actions/           actions typées à venir
-│   ├── validation/        moniteur, sandbox et validations à venir
-│   ├── eval/              évaluations et baselines à venir
-│   ├── episodes/          production d'épisodes à venir
-│   └── sidecars/          composants neuraux à venir
-├── configs/               configurations YAML et prompts figés
-├── docs/adr/              décisions d'architecture
-├── tests/                 tests, weight-free par défaut
-├── scripts/               outils d'acceptance et expériences
-├── experiments/           registre append-only des expériences
-├── reports/               rapports de développement et de mesure
-├── artifacts/             sorties d'exécution, non versionnées
-├── PROJECT.md             contexte complet du projet
-└── STATUS.md              tableau de statut courant
+├── formic/                main Python package
+│   ├── backbone/          checkpoint, groups, boundaries, runner
+│   ├── config/            configuration schema and loader
+│   ├── science/           determinism, environment, experiment registry
+│   ├── runtime/           transaction engine, planned
+│   ├── contracts/         ContractIR and compiler, planned
+│   ├── state/             State Fabric, planned
+│   ├── actions/           typed actions, planned
+│   ├── validation/        monitor, sandbox, and validation, planned
+│   ├── eval/              evaluation and baselines, planned
+│   ├── episodes/          episode production, planned
+│   └── sidecars/          neural components, planned
+├── configs/               YAML configurations and frozen prompts
+├── docs/adr/              architecture decision records
+├── tests/                 tests, weight-free by default
+├── scripts/               acceptance and experiment tools
+├── experiments/           append-only experiment registry
+├── reports/               development and measurement reports
+├── artifacts/             execution outputs, not versioned
+├── PROJECT.md             complete project context
+└── STATUS.md              current status board
 ```
 
-## Règles de contribution
+## Contribution Rules
 
-Avant toute modification importante, lire [`docs/conventions.md`](docs/conventions.md).
-Les principes essentiels sont :
+Before making a significant change, read [`docs/conventions.md`](docs/conventions.md).
+The essential principles are:
 
-- l'audit du checkpoint est l'autorité technique principale;
-- les étapes du projet sont strictement ordonnées;
-- une décision d'architecture ne doit pas être inventée implicitement;
-- tout nouveau comportement est derrière un flag désactivé par défaut;
-- le mode « tout désactivé » doit préserver le comportement Qwen;
-- toute mesure doit être reproductible et accompagnée de ses métadonnées;
-- les cellules Qwen ne doivent pas être réécrites;
-- les contraintes d'audit A1 à A12 doivent être respectées;
-- aucune étape suivante ne doit être lancée avant la validation de la précédente.
+- the checkpoint audit is the primary technical authority;
+- project steps are strictly ordered;
+- architectural decisions must not be invented implicitly;
+- every new behavior is behind a configuration flag disabled by default;
+- the all-disabled mode must preserve Qwen behavior;
+- every measurement must be reproducible and retain its metadata;
+- Qwen cells must not be rewritten;
+- audit constraints A1 through A12 must be respected;
+- no later step may begin before the previous step has been validated.
 
-## Documentation principale
+## Main Documentation
 
-- [`PROJECT.md`](PROJECT.md) : contexte, motivation, audit, architecture CAPE-R et
-  plan complet;
-- [`STATUS.md`](STATUS.md) : état courant des briques et des étapes;
-- [`docs/conventions.md`](docs/conventions.md) : règles de travail et contraintes
-  A1-A12;
-- [`docs/adr/`](docs/adr/) : décisions d'architecture;
-- [`reports/`](reports/) : résultats techniques et rapports d'étape;
-- [`experiments/REGISTRY.md`](experiments/REGISTRY.md) : registre des expériences.
+- [`PROJECT.md`](PROJECT.md): context, motivation, audit, CAPE-R architecture,
+  and the complete implementation plan;
+- [`STATUS.md`](STATUS.md): current brick and step status;
+- [`docs/conventions.md`](docs/conventions.md): working rules and A1-A12 audit
+  constraints;
+- [`docs/adr/`](docs/adr/): architecture decisions;
+- [`reports/`](reports/): technical and step reports;
+- [`experiments/REGISTRY.md`](experiments/REGISTRY.md): experiment registry.
 
-## Résumé
+## Summary
 
-Uly Code est le système agentique qui comprend, cadre et pilote les tâches de
-software engineering. Formic est le modèle d'exécution conçu pour transformer
-ces tâches cadrées en actions logicielles précises, validées et vérifiables.
+Uly Code is the agentic system that understands, scopes, and orchestrates
+software-engineering tasks. Formic is the execution model designed to transform
+those scoped tasks into precise, validated, and verifiable software actions.
 
-Le projet commence volontairement par une fondation stricte : préserver le
-comportement du modèle Qwen de base, mesurer l'environnement, construire l'état
-et les transactions, puis ajouter progressivement les capacités spécialisées.
-La performance future de Formic ne sera pas évaluée uniquement par la qualité
-de son texte, mais par sa capacité à produire des changements corrects,
-respecter les contraintes, récupérer des erreurs et terminer avec des preuves.
+The project intentionally starts with a strict foundation: preserve the behavior
+of the base Qwen model, measure the runtime, build typed state and transactions,
+and then add specialized capabilities incrementally.
+
+Formic will not be judged only by the quality of its text. Its success will be
+measured by whether it can execute long, complex, well-scoped tasks with the
+reliability and code quality of frontier-scale systems, while requiring far less
+inference cost when paired with a frontier orchestration model in Uly Code.
