@@ -284,7 +284,7 @@ baseline.
 
 ## Current Status
 
-SPEC-01 (the first step of Part 1) is complete and human-validated at 9/9.
+SPEC-01 (the first step of Part 1) is complete at 9/9.
 SPEC-02, which turns that preliminary evidence into a blocking identity gate
 and adds measured tolerances plus snapshot/restore, is in progress. The local,
 weight-free implementation is complete; the final A40 campaign has not yet run.
