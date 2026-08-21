@@ -194,6 +194,95 @@ def cmd_generate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_identity_check(args: argparse.Namespace) -> int:
+    """Run the local toy gate or verify the latest committed GPU PASS."""
+    try:
+        if args.toy:
+            _run_toy_identity_check()
+        else:
+            _verify_latest_identity_pass(_load(args.config))
+    except Exception as exc:  # noqa: BLE001 - the command must emit one verdict
+        print("IDENTITY CHECK: FAIL")
+        print(f"  {type(exc).__name__}: {exc}")
+        return 1
+    print("IDENTITY CHECK: PASS")
+    return 0
+
+
+def _run_toy_identity_check() -> None:
+    from formic.backbone.groups import HybridGroupView
+    from formic.science.identity.executor import Endpoint, run_aligned_pair
+    from formic.science.identity.types import ExecutionMode
+
+    from formic.science.identity.toy import toy_model
+
+    reference_model = toy_model(seed=202)
+    candidate_model = toy_model(seed=202)
+    reference = Endpoint(
+        "reference",
+        reference_model,
+        HybridGroupView.from_text_config(reference_model.config),
+        False,
+    )
+    candidate = Endpoint(
+        "runner",
+        candidate_model,
+        HybridGroupView.from_text_config(candidate_model.config),
+        True,
+    )
+    result = run_aligned_pair(
+        reference,
+        candidate,
+        prompt_token_ids=(1, 2, 3, 4, 5, 6, 7, 8),
+        mode=ExecutionMode.DECODE_CACHED,
+        length_class="short",
+        forced_token_ids=(9, 10, 11, 12, 13, 14, 15, 16),
+        capture=True,
+    )
+    for comparison in result.payload.comparisons:
+        for item in comparison.measurements:
+            metric = item.metric
+            tensor = metric.tensor if hasattr(metric, "tensor") else metric
+            if not tensor.exact:
+                raise RuntimeError(
+                    f"first divergence step={item.step} location={item.location.key} "
+                    f"coordinate={tensor.first_coordinate} delta={tensor.max_abs_delta}"
+                )
+            if hasattr(metric, "top1_agreement") and not metric.top1_agreement:
+                raise RuntimeError(
+                    f"first divergence step={item.step} location={item.location.key} top1"
+                )
+
+
+def _verify_latest_identity_pass(config: RunConfig) -> None:
+    from formic.science.backbone_hash import load_reusable_backbone_hash
+    from formic.science.identity.governance import (
+        load_gpu_verdict,
+        verify_latest_pass,
+        verify_tolerance_governance,
+    )
+    from formic.science.identity.prompts import load_frozen_corpus
+    from formic.science.identity.tolerances import load_tolerances
+
+    identity = config.identity
+    tolerances = load_tolerances(REPO_ROOT / identity.tolerances_path)
+    corpus = load_frozen_corpus(REPO_ROOT / identity.prompt_set_path)
+    backbone = load_reusable_backbone_hash(REPO_ROOT / identity.backbone_hash_path)
+    verdict = load_gpu_verdict(REPO_ROOT / identity.verdict_path)
+    verify_tolerance_governance(
+        REPO_ROOT / identity.tolerance_governance_path,
+        tolerances_path=REPO_ROOT / identity.tolerances_path,
+        repo_root=REPO_ROOT,
+    )
+    verify_latest_pass(
+        verdict,
+        config_sha256=config.config_hash(),
+        tolerances_sha256=tolerances.source_sha256,
+        corpus_sha256=corpus.corpus_sha256,
+        backbone_sha256=backbone.sha256,
+    )
+
+
 def _numel(shape: tuple[int, ...]) -> int:
     total = 1
     for dim in shape:
@@ -235,6 +324,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_generate)
+
+    p = sub.add_parser(
+        "identity-check",
+        help="blocking identity verdict (latest GPU PASS, or --toy locally)",
+    )
+    p.add_argument(
+        "--toy",
+        action="store_true",
+        help="run the weight-free end-to-end mechanism check",
+    )
+    p.set_defaults(func=cmd_identity_check)
 
     return parser
 

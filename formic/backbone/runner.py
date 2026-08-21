@@ -32,6 +32,7 @@ __all__ = [
     "generate",
     "forward_logits",
     "forced_cached_decode_logits",
+    "identity_forward",
     "set_seed",
 ]
 
@@ -305,6 +306,28 @@ def forced_cached_decode_logits(
         trace.append(outputs.logits[0, -1].detach().float().cpu())
         current = torch.tensor([[token_id]], dtype=torch.long, device=device)
     return tuple(trace)
+
+
+@torch.no_grad()
+def identity_forward(
+    handle: BackboneHandle,
+    *,
+    trace_collector: Any | None = None,
+    position_state: Any | None = None,
+    **model_kwargs: Any,
+) -> Any:
+    """Run the explicit CausalLM forward used by SPEC-02.
+
+    The trace path is opt-in. With ``trace_collector=None`` no hook is attached
+    and the kwargs are passed unchanged to the same stock model object. The
+    trace-on/off bit-inertness test is blocking before calibration.
+    """
+    if trace_collector is None:
+        return handle.model(**model_kwargs)
+    with trace_collector:
+        outputs = handle.model(**model_kwargs)
+    trace_collector.last_trace = trace_collector.finish(outputs, position_state)
+    return outputs
 
 
 def _input_device(handle: BackboneHandle) -> torch.device:

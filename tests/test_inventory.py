@@ -12,18 +12,16 @@ import pytest
 
 from formic.backbone import constants as C
 from formic.backbone.inventory import (
+    AUDITED_INVENTORY_MANIFEST,
     CheckpointInventory,
     InventoryError,
     classify,
     remap_key,
 )
 
-CHECKPOINT = Path("/workspace/Qwen3.8-27B")
-
-
 @pytest.fixture(scope="module")
 def inventory() -> CheckpointInventory:
-    return CheckpointInventory.from_checkpoint(CHECKPOINT)
+    return CheckpointInventory.from_audited_manifest(AUDITED_INVENTORY_MANIFEST)
 
 
 def test_inventory_matches_audit_totals(inventory: CheckpointInventory):

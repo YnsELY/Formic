@@ -59,12 +59,16 @@ def configure_determinism(
     # Benchmarking is not a configured behavior and can select a different
     # convolution algorithm based on timing noise, so it remains disabled.
     torch.backends.cudnn.benchmark = False
-    if numerics is not None and torch.cuda.is_available():
+    if numerics is not None:
+        # These backend flags exist on CPU builds too. Apply them unconditionally
+        # so a weight-free CI run verifies the exact policy that CUDA will later
+        # use instead of silently leaving process defaults in place.
         torch.backends.cudnn.allow_tf32 = numerics.cudnn_allow_tf32
         torch.backends.cuda.matmul.allow_tf32 = numerics.cuda_matmul_allow_tf32
-        torch.backends.cuda.enable_flash_sdp(numerics.flash_sdp)
-        torch.backends.cuda.enable_mem_efficient_sdp(numerics.mem_efficient_sdp)
-        torch.backends.cuda.enable_math_sdp(numerics.math_sdp)
+        if torch.cuda.is_available():
+            torch.backends.cuda.enable_flash_sdp(numerics.flash_sdp)
+            torch.backends.cuda.enable_mem_efficient_sdp(numerics.mem_efficient_sdp)
+            torch.backends.cuda.enable_math_sdp(numerics.math_sdp)
 
 
 def git_commit(repo: str | Path | None = None) -> str | None:

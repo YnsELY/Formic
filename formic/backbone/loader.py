@@ -32,6 +32,7 @@ from formic.backbone import constants as C
 from formic.backbone.boundaries import BoundaryHookManager, count_registered_hooks
 from formic.backbone.groups import HybridGroupView
 from formic.backbone.inventory import (
+    AUDITED_INVENTORY_MANIFEST,
     CheckpointInventory,
     InventoryError,
     StrictLoadReport,
@@ -327,11 +328,22 @@ def expected_parameter_count(mode: str, inventory: CheckpointInventory) -> int:
 
 
 def verify_checkpoint_only(checkpoint_path: str | Path) -> dict[str, Any]:
-    """Inventory + structure checks with no weights loaded (fast CI path)."""
+    """Inventory + structure checks with no weights loaded (fast CI path).
+
+    When the real checkpoint directory exists, its actual shard headers remain
+    authoritative and any missing shard is fatal. In a weight-free local/CI
+    environment, the committed audited header manifest and official config are
+    used instead. Production loading never takes this fallback (A12).
+    """
     path = Path(checkpoint_path)
-    inventory = CheckpointInventory.from_checkpoint(path)
+    if path.is_dir():
+        inventory = CheckpointInventory.from_checkpoint(path)
+        config_path = path / "config.json"
+    else:
+        inventory = CheckpointInventory.from_audited_manifest(AUDITED_INVENTORY_MANIFEST)
+        config_path = AUDITED_INVENTORY_MANIFEST.with_name("config.json")
     inventory.validate_against_audit()
-    raw_config = json.loads((path / "config.json").read_text(encoding="utf-8"))
+    raw_config = json.loads(config_path.read_text(encoding="utf-8"))
     view = HybridGroupView.from_checkpoint_config(raw_config)
     if raw_config["architectures"] != [C.RUNTIME_ARCHITECTURE]:
         raise InventoryError(

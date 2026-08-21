@@ -31,7 +31,13 @@ __all__ = [
     "InventoryError",
     "assert_strict_load",
     "remap_key",
+    "AUDITED_INVENTORY_MANIFEST",
 ]
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+AUDITED_INVENTORY_MANIFEST = (
+    REPO_ROOT / "configs" / "checkpoint_metadata" / "qwen3_8_27b" / "inventory.json"
+)
 
 Family = Literal["text", "lm_head", "vision", "mtp"]
 InventoryTarget = Literal["text_only", "audit_multimodal"]
@@ -150,6 +156,62 @@ class CheckpointInventory:
             index_map=weight_map,
             index_total_size=index_total,
         )
+
+    @classmethod
+    def from_audited_manifest(cls, path: str | Path) -> "CheckpointInventory":
+        """Load the committed, weight-free header manifest used by local CI.
+
+        This constructor is deliberately separate from :meth:`from_checkpoint`.
+        It is never used by :func:`load_backbone`: production loading must read
+        and validate the headers of the actual shards (A12). The manifest only
+        lets structural guards run where the 55 GB checkpoint is unavailable.
+        """
+        path = Path(path)
+        if not path.is_file():
+            raise InventoryError(f"missing audited inventory manifest: {path}")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload.get("schema_version") != 1:
+            raise InventoryError(
+                f"unsupported inventory manifest schema: {payload.get('schema_version')!r}"
+            )
+        if payload.get("repo_id") != "Qwen/Qwen3.8-27B":
+            raise InventoryError(f"unexpected manifest repo_id: {payload.get('repo_id')!r}")
+        if payload.get("revision") != C.CHECKPOINT_COMMIT:
+            raise InventoryError(
+                f"manifest revision {payload.get('revision')!r} != {C.CHECKPOINT_COMMIT!r}"
+            )
+
+        records: list[TensorRecord] = []
+        seen: set[str] = set()
+        for item in payload.get("records", ()):
+            name = item["name"]
+            if name in seen:
+                raise InventoryError(f"duplicate tensor in audited manifest: {name}")
+            seen.add(name)
+            dtype_code = item["dtype"]
+            if dtype_code not in _DTYPES:
+                raise InventoryError(f"unsupported dtype {dtype_code!r} for {name}")
+            dtype_name, _ = _DTYPES[dtype_code]
+            shape = tuple(int(dimension) for dimension in item["shape"])
+            records.append(
+                TensorRecord(
+                    name=name,
+                    shape=shape,
+                    dtype=dtype_name,
+                    num_params=_numel(shape),
+                    shard=item["shard"],
+                    family=classify(name),
+                )
+            )
+
+        inventory = cls(
+            path=path,
+            records=tuple(sorted(records, key=lambda record: record.name)),
+            index_map={record.name: record.shard for record in records},
+            index_total_size=payload.get("index_total_size"),
+        )
+        inventory.validate_against_audit()
+        return inventory
 
     # -- accessors ---------------------------------------------------------
 

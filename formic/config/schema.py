@@ -28,6 +28,7 @@ CONFIG_VERSION = 1
 
 ThinkingMode = Literal["on", "off", "capped"]
 BackboneMode = Literal["text_only"]
+PromptLengthClass = Literal["short", "medium", "long"]
 
 
 class ConfigError(ValueError):
@@ -286,6 +287,128 @@ class NumericsSection:
             raise ConfigError("numerics.require_last_two_exact cannot be disabled")
 
 
+@dataclass(frozen=True)
+class IdentitySection:
+    """SPEC-02 identity and calibration protocol.
+
+    These are measurement controls, not Formic runtime mechanisms. Keeping
+    them in the resolved config makes every verdict reproducible without
+    weakening the all-flags-off identity invariant.
+    """
+
+    prompt_set_path: str = "configs/reference_prompts.yaml"
+    tolerances_path: str = "tolerances.json"
+    tolerance_governance_path: str = "configs/tolerance_governance.json"
+    verdict_path: str = "reports/identity/latest_verdict.json"
+    backbone_hash_path: str = (
+        "configs/checkpoint_metadata/qwen3_8_27b/backbone_hash.json"
+    )
+    decode_tokens: int = 8
+    accumulation_probe_tokens: int = 64
+    measurement_repetitions: int = 3
+    exact_gate_repetitions: int = 2
+    continuation_seeds: tuple[int, ...] = (0, 1, 2)
+    decode_prompt_ids: tuple[str, ...] = (
+        "short_error_assertion",
+        "medium_cache_regression",
+        "long_resume_incidents",
+    )
+    accumulation_probe_prompt_ids: tuple[str, ...] = (
+        "short_error_assertion",
+        "medium_cache_regression",
+    )
+    snapshot_validation_prompt_id: str = "audit_echo"
+    tolerance_margin_multiplier: float = 2.0
+    ci_segmentations: tuple[str, ...] = ("median",)
+    calibration_segmentations: tuple[str, ...] = (
+        "early",
+        "median",
+        "late",
+        "quarters",
+    )
+    long_calibration_segmentations: tuple[str, ...] = ("median", "quarters")
+    recompute_classes: tuple[PromptLengthClass, ...] = ("short", "medium")
+    full_boundary_capture_classes: tuple[PromptLengthClass, ...] = (
+        "short",
+        "medium",
+    )
+    final_state_only_classes: tuple[PromptLengthClass, ...] = ("long",)
+    require_top1_agreement: bool = True
+    kl_is_blocking: bool = False
+
+    def validate(self) -> None:
+        if self.decode_tokens != 8:
+            raise ConfigError(
+                "identity.decode_tokens is pinned to 8 for calibration and CI by ADR-0005"
+            )
+        if self.accumulation_probe_tokens != 64:
+            raise ConfigError(
+                "identity.accumulation_probe_tokens is pinned to 64 by SPEC-02"
+            )
+        if self.measurement_repetitions != 3:
+            raise ConfigError("identity.measurement_repetitions is pinned to 3")
+        if self.exact_gate_repetitions != 2:
+            raise ConfigError("identity.exact_gate_repetitions is pinned to 2")
+        if len(set(self.continuation_seeds)) != 3 or any(
+            seed < 0 for seed in self.continuation_seeds
+        ):
+            raise ConfigError(
+                "identity.continuation_seeds requires 3 distinct non-negative seeds"
+            )
+        if self.decode_prompt_ids != (
+            "short_error_assertion",
+            "medium_cache_regression",
+            "long_resume_incidents",
+        ):
+            raise ConfigError(
+                "identity.decode_prompt_ids must contain one pinned prompt per class"
+            )
+        if self.accumulation_probe_prompt_ids != (
+            "short_error_assertion",
+            "medium_cache_regression",
+        ):
+            raise ConfigError(
+                "identity.accumulation_probe_prompt_ids are pinned by ADR-0005"
+            )
+        if self.snapshot_validation_prompt_id != "audit_echo":
+            raise ConfigError(
+                "identity.snapshot_validation_prompt_id must be audit_echo"
+            )
+        if self.tolerance_margin_multiplier != 2.0:
+            raise ConfigError(
+                "identity.tolerance_margin_multiplier is fixed at 2.0 by SPEC-02"
+            )
+        if self.ci_segmentations != ("median",):
+            raise ConfigError("identity.ci_segmentations must be exactly ['median']")
+        if self.calibration_segmentations != (
+            "early",
+            "median",
+            "late",
+            "quarters",
+        ):
+            raise ConfigError(
+                "identity.calibration_segmentations must be early/median/late/quarters"
+            )
+        if self.long_calibration_segmentations != ("median", "quarters"):
+            raise ConfigError(
+                "long prompts must use median and quarters segmentations only"
+            )
+        if self.recompute_classes != ("short", "medium"):
+            raise ConfigError(
+                "full-recomputation decode is restricted to short and medium prompts"
+            )
+        if set(self.full_boundary_capture_classes) != {"short", "medium"}:
+            raise ConfigError(
+                "full boundary capture is restricted to short and medium prompts"
+            )
+        if self.final_state_only_classes != ("long",):
+            raise ConfigError("long prompts must use final-state-only capture")
+        if not self.require_top1_agreement:
+            raise ConfigError("identity.require_top1_agreement cannot be disabled")
+        if self.kl_is_blocking:
+            raise ConfigError("identity.kl_is_blocking must stay false")
+
+
 # --------------------------------------------------------------------------
 # Root
 # --------------------------------------------------------------------------
@@ -302,6 +425,7 @@ class RunConfig:
     flags: FlagsSection = field(default_factory=FlagsSection)
     generation: GenerationSection = field(default_factory=GenerationSection)
     numerics: NumericsSection = field(default_factory=NumericsSection)
+    identity: IdentitySection = field(default_factory=IdentitySection)
 
     def validate(self) -> None:
         if self.formic_config_version != CONFIG_VERSION:

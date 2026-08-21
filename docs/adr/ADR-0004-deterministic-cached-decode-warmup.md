@@ -1,113 +1,116 @@
-# ADR-0004 — Deterministic cached-decode warmup protocol
+# ADR-0004 — Aligned in-process identity protocol for cached decode
 
-- **Status:** PROPOSED
-- **Date:** 2026-08-18
+- **Status:** ACCEPTED
+- **Date:** 2026-08-21
 - **Step:** part 1 / step 1
-- **Deciders:** pending; candidate acceptance rerun remains red
+- **Deciders:** Yanis
 - **Supersedes / superseded by:** —
 
 ## Context
 
-SPEC-01 proves wrapper equivalence: Formic and direct stock
-`Qwen3_5ForCausalLM` are bit-identical at prefill on 6/6 prompts and at cached
-CUDA decode when compared at the same execution ordinal (8/8 steps for run 1
-and 8/8 for run 2). CPU Formic/HF cached decode is also exact on 3/3 steps.
+SPEC-01 initially compared Formic and Hugging Face cached generation in
+independent CUDA processes. Prefill was bit-exact, but cached decode could
+diverge by roughly 14 logit units. The diagnostics had to distinguish a Formic
+wrapper error from a property of the stock backend without modifying a Qwen
+cell, kernel, checkpoint, or installed package.
 
-Unwarmed CUDA traces differ between the first and later trace in a process.
-`EXP-0008` shows that this is deterministic, not a Formic mismatch or a random
-noise floor:
+The following observations are established by `EXP-0008` and the step-1
+diagnostic reports:
 
-- run 2 equals run 3 exactly (8/8, delta 0, KL 0);
-- three independent one-trace processes are mutually exact and equal run 1 of
-  the three-trace process;
-- the state fingerprint remains unchanged across traces: all 851 parameters
-  (including offloaded weights), 2 registered buffers, every direct module
-  tensor attribute, and 51 public `None` state slots such as `rope_deltas`;
-- Formic/HF aligned ordinals are exact in separate processes.
+1. Formic and a direct stock `Qwen3_5ForCausalLM` are exact when compared at
+   aligned execution ordinals, on CUDA and CPU.
+2. The first cached trace of a process and later traces may belong to two
+   different, individually stable numerical realizations. The same effect is
+   present with stock Hugging Face alone.
+3. Three independent one-trace processes are mutually exact. Within a
+   multi-trace process, runs 2 and 3 are exact while run 1 may differ.
+4. Model fingerprints remain unchanged: parameters, registered buffers,
+   direct module tensor attributes, and public `None` state slots do not
+   explain the ordinal effect.
+5. Formic and the explicit Hugging Face loop have zero recorded argument
+   differences over 96 forwards. No cache or model-state divergence precedes
+   the first logit divergence.
+6. Boundary observers and state capture are bit-inert under their dedicated
+   gates.
+7. `generate()` is not the same reference computation as the explicit loop.
+   It pre-creates a cache and uses explicit masks/positions and
+   `logits_to_keep=1`; the explicit loop computes the full LM-head output and
+   slices the final position. The two conventions may diverge from prefill
+   while retaining the same logical model.
 
-The effect is therefore process-global backend/runtime initialization outside
-the fingerprinted model tensor state. torch 2.4 reports no deterministic CUDA
-implementation for a stock GDN `cumsum`, but this fact does not identify that
-operation as the cause of the measured first-use behavior.
+PyTorch 2.4 reports no deterministic CUDA implementation for a stock GDN
+`cumsum`. This is a backend fact, not a demonstrated root cause of the observed
+ordinal effect. The project records the measurements and does not attribute
+causality.
 
-Kernel choice is shape-sensitive. A short four-token prompt warmed with the
-initial `N=1` policy did not make the 20-token prompt stable: its first-use
-comparison reached delta 23.71875 and KL 18.4407962 nats. With six warmups,
-the short and long shapes both pass the last-two-traces exact assertion.
+## Decision
 
-The candidate configuration hash is
-`ac4b4adfaa98d5454d57853ddd2d51f419cab56d9aabbafb5505bc9994f44634`.
-It pins `CUBLAS_WORKSPACE_CONFIG=:4096:8`, disables cuDNN and CUDA-matmul TF32,
-disables Flash and memory-efficient SDPA, retains math SDPA, and requires six
-unmeasured traces plus two exact measured traces for every prompt/cache shape.
+There is no unqualified single “Hugging Face reference flow.” Formic identity
+uses the **explicit CausalLM decoding loop** as its pinned reference convention;
+`model.generate()` is excluded as an identity oracle.
 
-## Proposed decision
+Every identity comparison is performed at an aligned protocol and execution
+ordinal inside one process. The resolved numerical policy is applied before
+model execution. For each exact input shape, the path receives six unmeasured
+fresh-state warmup traces, followed by at least two measured traces. The last
+two measured traces must be bit-exact; otherwise the measurement is invalid.
+No state is captured during warmup.
 
-Retain bit-for-bit equality as the cached-decode acceptance criterion. The
-candidate warmup policy is insufficient by itself: it stabilizes individual
-processes but does not establish cross-process Formic/HF equality.
+The blocking identity criterion is:
 
-Every quoted cached-decode measurement must use the resolved `numerics` policy:
+- bit-exact prefill;
+- exact Formic/reference execution at an aligned in-process protocol;
+- zero forward-argument differences;
+- no cache or model-state divergence before a logit divergence;
+- proven inertness of observers, boundary hooks, and diagnostic tracing.
 
-1. apply the pinned CUDA backend settings before model execution;
-2. for every new prompt/cache shape, execute six unmeasured fresh-cache greedy
-   traces;
-3. execute at least two measured traces of that same shape;
-4. require exact equality of the last two measured full-logit traces; otherwise
-   invalidate the measurement and report the failed stability proof;
-5. retain the per-step logits or metrics needed to audit the assertion.
+Bit-for-bit identity between independent CUDA processes is classified as a
+documented backend limitation and is outside the identity criterion. It must
+not be claimed by Formic reports.
 
-This policy applies independently to each computational path. Cache versus full
-recomputation must warm and stabilize cache and recomputation separately before
-they are compared.
-
-The full SPEC-01 candidate acceptance rerun completed under this configuration:
-each stage passed its 6/6 local stability proof, but cross-process generation
-remained exact on 0/4 manual-greedy, 0/6 greedy, and 0/3 sampled prompts. The
-proposal therefore remains unaccepted, the ninth checklist item remains red,
-and SPEC-02 does not start.
+Cross-path comparisons such as segmented versus monolithic prefill, cached
+decode versus full recomputation, and continuous versus restored execution are
+separate numerical-equivalence measurements. SPEC-02 owns their measured
+tolerances and blocking policy.
 
 ## Audit constraints engaged
 
-- **A1/A2** — warmup traces receive fresh model-created caches; no supplied
-  cache is assumed read-only and no bare `DynamicCache` is constructed.
-- **A3/A4** — no crop, rollback, restore, fork, or sharing of GDN state occurs.
-- **A6** — the fingerprint explicitly captures ordinary module attributes and
-  `None` slots so tensor-attached state such as `rope_deltas` cannot escape it.
-- **A8** — all measurements are text-only, batch 1, and unpadded.
-- **A11** — no model cell, kernel, checkpoint, or installed package is patched.
-- **A12** — all Formic diagnostic loads retain the strict 851/851 inventory.
+- **A1** — no supplied cache is treated as read-only because `use_cache=False`.
+- **A2** — caches are model-created or constructed with the model config.
+- **A3/A4** — SPEC-01 performs no crop, rollback, restore, or shared-buffer
+  fork. SPEC-02 implements those operations through deep-cloned snapshots.
+- **A6** — model-attached state slots, including absence of `rope_deltas` on
+  the text-only CausalLM entrypoint, are recorded explicitly.
+- **A8** — all decisive runs are text-only, batch 1, and unpadded.
+- **A11** — no Qwen cell or kernel is replaced, copied, subclassed, or patched.
+- **A12** — all Formic loads retain the strict 851/851 textual inventory.
 
 ## Alternatives considered
 
 | Option | Why not |
 |---|---|
-| Run one trace with no warmup | Deterministically depends on process-first-use state and is invalid. |
-| Warm once globally | Rejected by the long-form probe under `N=1`; shape-sensitive initialization can remain. |
-| Statistical equivalence (delta, KL, top-1) | Rejected: exact cached decode is attainable under the pinned warmup protocol. These metrics remain diagnostics, not acceptance tolerances. |
-| Patch or replace the GDN fallback | Violates A11 and changes the audited backend. |
-| Upgrade torch | Changes the numerical baseline and was explicitly excluded from this decision. |
-| Accept top-1 agreement alone | Discards full-distribution differences that the exact protocol detects. |
+| Compare independent CUDA processes bit-for-bit | The stock backend itself exhibits a deterministic execution-ordinal effect, so this mixes wrapper identity with process history. |
+| Use `generate()` as the Hugging Face oracle | It follows a different call and LM-head convention from the explicit loop. |
+| Accept top-1 equality alone | It discards observable full-distribution differences and is weaker than the aligned exact criterion. |
+| Patch the GDN fallback or upgrade torch | This changes the audited backend and violates the step scope/A11. |
+| Attribute the effect to CUDA `cumsum` | The available measurements do not establish that causal claim. |
 
 ## Consequences
 
-- The numerical backend and warmup policy are part of the versioned config hash,
-  environment report, and every acceptance artifact.
-- A newly introduced prompt length, cache length, or path must be warmed and
-  pass the exact stability assertion before its output is quoted.
-- CUDA cache versus full recomputation, measured after independent warmups,
-  has delta max 15.09375, KL max 5.2464554 nats, and top-1 3/8. Each individual
-  path is stable 8/8 exactly; the difference is a path property, not a warmup
-  artifact.
-- SPEC-01 remains 8/9 and SPEC-02 remains unstarted; the candidate rerun did
-  not close cross-process equality.
+- SPEC-01 is accepted as 9/9 under the aligned in-process identity definition.
+- Reports must name the exact reference convention and may not claim
+  independent-process CUDA bit-exactness.
+- Shape-specific warmup and stability proof are part of the versioned config,
+  protocol hash, and every decisive artifact.
+- SPEC-02 may now build the formal blocking gate and measured cross-path
+  tolerances without reopening the settled wrapper-equivalence investigation.
 
 ## Evidence
 
 - Experiment: `EXP-0008`.
-- Primary diagnostic report: `reports/step1_decode_diagnostics.md`.
-- Shape probe: `artifacts/step1/decode_diagnostics/cuda_formic_shape.json`.
-- Hot cache/recompute probe:
-  `artifacts/step1/decode_diagnostics/cuda_formic_hot_cache_recompute.json`.
-- Reproducer: `scripts/step1_decode_diagnostics.py`.
-- Runtime audit: `audits/qwen3_8_27b/06_gated_deltanet_audit.md`.
+- `reports/step1_decode_diagnostics.md`.
+- `reports/step1_runner_state_diagnostics.md`.
+- `reports/step1_formic_hf_divergence_conclusion.md`.
+- `scripts/step1_decode_diagnostics.py`.
+- `scripts/step1_runner_state_diagnostics.py`.
+- Audit: `audits/qwen3_8_27b/06_gated_deltanet_audit.md`.

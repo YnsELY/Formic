@@ -17,7 +17,12 @@ from formic.backbone.groups import (
     HybridGroupView,
 )
 
-CHECKPOINT = Path("/workspace/Qwen3.8-27B")
+CHECKPOINT = (
+    Path(__file__).resolve().parents[1]
+    / "configs"
+    / "checkpoint_metadata"
+    / "qwen3_8_27b"
+)
 
 
 @pytest.fixture(scope="module")

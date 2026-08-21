@@ -1,0 +1,34 @@
+# Archived immutable source for the six SPEC-01 continuity prompts.
+version: 1
+description: "step-1 preliminary identity prompts (text, code, instruction)"
+
+prompts:
+  - id: audit_echo
+    kind: raw
+    text: "Audit technique court."
+
+  - id: plain_text
+    kind: raw
+    text: "The capital of France is"
+
+  - id: code_completion
+    kind: raw
+    text: "def fibonacci(n: int) -> int:\n    \"\"\"Return the n-th Fibonacci number.\"\"\"\n"
+
+  - id: code_bugfix
+    kind: raw
+    text: "# Fix the off-by-one error in this function:\ndef last_index(items):\n    return len(items)\n"
+
+  - id: instruction_short
+    kind: chat
+    messages:
+      - role: user
+        content: "Rename the variable `x` to `count` in this snippet and change nothing else:\n\ntotal = 0\nfor x in items:\n    total += x\n"
+
+  - id: instruction_scope
+    kind: chat
+    messages:
+      - role: system
+        content: "You are an execution model. Do exactly what is asked, nothing more."
+      - role: user
+        content: "Add a None check at the start of parse_field. Do not touch any other function."

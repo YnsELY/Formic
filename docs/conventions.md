@@ -83,8 +83,11 @@ A12 → `formic/backbone/inventory.py` + `tests/test_inventory.py`;
 
 ## 5. Reproducibility contract
 
-Any quoted number carries: config hash, git commit, seeds, environment report,
-`EXP-…` id. Decisive measurements: ≥3 seeds, inter-seed noise reported.
+Any quoted number carries: config hash, git commit, applicable seeds,
+environment report, `EXP-…` id. SPEC-02 forced-continuation inference uses
+≥3 repetitions and no RNG seed sweep; three seeds apply only when the reference
+sampled continuations are generated. Any later stochastic decisive measurement
+uses ≥3 seeds and reports inter-seed noise.
 
 ```bash
 python -m formic.cli config    # resolved config + hash

@@ -96,3 +96,29 @@ numerics:
   warmup_traces_per_shape: 6
   measured_traces_per_shape: 2
   require_last_two_exact: true
+
+# SPEC-02 measurement protocol. This section changes no model computation;
+# snapshot_restore and all other Formic mechanisms remain OFF above.
+identity:
+  prompt_set_path: configs/reference_prompts.yaml
+  tolerances_path: tolerances.json
+  tolerance_governance_path: configs/tolerance_governance.json
+  verdict_path: reports/identity/latest_verdict.json
+  backbone_hash_path: configs/checkpoint_metadata/qwen3_8_27b/backbone_hash.json
+  decode_tokens: 8
+  accumulation_probe_tokens: 64
+  measurement_repetitions: 3
+  exact_gate_repetitions: 2
+  continuation_seeds: [0, 1, 2]
+  decode_prompt_ids: [short_error_assertion, medium_cache_regression, long_resume_incidents]
+  accumulation_probe_prompt_ids: [short_error_assertion, medium_cache_regression]
+  snapshot_validation_prompt_id: audit_echo
+  tolerance_margin_multiplier: 2.0
+  ci_segmentations: [median]
+  calibration_segmentations: [early, median, late, quarters]
+  long_calibration_segmentations: [median, quarters]
+  recompute_classes: [short, medium]
+  full_boundary_capture_classes: [short, medium]
+  final_state_only_classes: [long]
+  require_top1_agreement: true
+  kl_is_blocking: false

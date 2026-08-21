@@ -1,5 +1,31 @@
-"""State Fabric: repository snapshot, artifact graph, task DAG, evidence bank, ledger.
+"""Execution-state primitives.
 
-Not implemented yet: this module is filled in at **step 4** of the part-1 plan.
-Steps run in strict order; nothing here may be started early (plan rule 1).
+SPEC-02 adds only neural cache snapshot/restore. The durable State Fabric,
+artifact graph, task DAG, evidence bank and ledger remain deferred to step 4.
 """
+
+from formic.state.snapshot import (
+    BranchActivationError,
+    ExecutionSnapshot,
+    ExecutionStateController,
+    PositionState,
+    RestoredExecutionState,
+    SnapshotError,
+    capture_cache_layers,
+    capture_model_state,
+    restore,
+    snapshot,
+)
+
+__all__ = [
+    "BranchActivationError",
+    "ExecutionSnapshot",
+    "ExecutionStateController",
+    "PositionState",
+    "RestoredExecutionState",
+    "SnapshotError",
+    "capture_cache_layers",
+    "capture_model_state",
+    "restore",
+    "snapshot",
+]

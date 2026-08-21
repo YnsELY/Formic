@@ -284,7 +284,25 @@ baseline.
 
 ## Current Status
 
-The repository is currently in the first step of Part 1.
+SPEC-01 (the first step of Part 1) is complete and human-validated at 9/9.
+SPEC-02, which turns that preliminary evidence into a blocking identity gate
+and adds measured tolerances plus snapshot/restore, is in progress. The local,
+weight-free implementation is complete; the final A40 campaign has not yet run.
+
+SPEC-02 is currently pinned to the following protocol:
+
+- the twelve-prompt corpus is frozen in
+  [`configs/reference_prompts.yaml`](configs/reference_prompts.yaml), including
+  exact rendered text, token IDs, per-prompt hashes, and corpus hash
+  `482e63d88a53d2850fe87db648f7d6fe2414ca5ee64b1a307de7cb3501c1f3c0`;
+- calibration and CI use an eight-frame decode horizon;
+- the long class has no full-recompute decode and uses only median and quarter
+  segmentation;
+- the 64-frame logits-only accumulation probe remains mandatory for one short
+  and one medium prompt;
+- the A40 session is one model process and one full checkpoint load;
+- the preflight reports load time, per-post duration estimates, and total
+  duration, then continues automatically without a budget gate.
 
 ### Available Today
 
@@ -298,29 +316,36 @@ The repository is currently in the first step of Part 1.
 - 17 inert boundaries;
 - a native generation runner;
 - determinism controls and experiment reports;
+- in-memory snapshot/restore with synthetic hybrid-cache tests;
+- the frozen SPEC-02 prompt corpus and strict identity protocol types;
+- the weight-free `identity-check --toy` gate;
+- the post-preflight duration reporter in `scripts/step2_budget_gate.py`;
 - weight-free tests and A11/A12 safeguards.
 
 ### Backbone Validation Status
 
-The preliminary SPEC-01 verification is currently **8/9**:
+The accepted SPEC-01 verification is **9/9**:
 
 - Formic/HF prefill is bit-identical on six prompts;
 - strict loading and model structure are validated;
 - no-op hooks are bit-inert;
 - Formic and HF are exact in several aligned controls;
-- a cached CUDA decode divergence remains visible across some independent
-  executions.
+- Formic and the explicit Hugging Face reference loop are exact at aligned
+  in-process execution ordinals;
+- runner/reference arguments are identical over 96 forwards and no state
+  divergence precedes the logits.
 
-Available diagnostics indicate that this divergence is most likely related to a
-deterministic execution-ordinal or initialization effect in the CUDA/GDN
-backend, rather than a demonstrated logical defect in the Formic wrapper. The
-same effect is observable with stock Hugging Face, and Formic and HF become
-bit-identical when their execution conditions are properly aligned.
+The diagnostics establish a deterministic first-execution/ordinal effect that
+is also observable with stock Hugging Face. They do not establish a root cause.
+Independent-process CUDA bit-exactness is a documented backend limitation and
+is outside the accepted identity criterion. Formic does not claim it.
 
-This conclusion allows Formic development to continue, but it does not
-automatically turn the 8/9 verification into a formal 9/9 pass. Cross-process
-CUDA reproducibility and the definition of numerical tolerances remain documented
-open questions.
+`generate()` is not used as the reference oracle because it follows a different
+call convention, notably `logits_to_keep=1`. The pinned reference is the
+explicit `Qwen3_5ForCausalLM` loop. SPEC-02 measures cross-path tolerances under
+that aligned in-process convention and makes the identity gate automatic and
+blocking. Its duration reporter is informational only and never refuses to
+continue on budget grounds.
 
 See [`STATUS.md`](STATUS.md) and the [divergence analysis closing
 report](reports/step1_formic_hf_divergence_conclusion.md) for the detailed
@@ -339,6 +364,7 @@ python -m formic.cli structure
 python -m formic.cli inventory
 python -m formic.cli config
 python -m formic.cli env
+python -m formic.cli identity-check --toy
 python -m pytest tests/ -q
 ```
 
@@ -349,6 +375,19 @@ python -m formic.cli load
 python -m formic.cli generate --prompt "..." --chat
 python scripts/step1_acceptance.py --stage all
 ```
+
+The final A40 campaign is launched only from a pod with the checkpoint mounted
+at `/workspace/Qwen3.8-27B`. Its first action is the preflight; the resulting
+estimate is written and displayed by:
+
+```bash
+python scripts/step2_budget_gate.py \
+  --preflight artifacts/step2/preflight/estimate.json
+```
+
+This command has no budget argument and always exits successfully. A real
+campaign must still stop immediately on an identity-gate failure and stop the
+pod before any post-run analysis.
 
 Model loading requires several dozen gigabytes of memory and may take several
 minutes. Decisive measurements must use the checkpoint, configuration, and
@@ -361,7 +400,7 @@ formic/
 ├── formic/                main Python package
 │   ├── backbone/          checkpoint, groups, boundaries, runner
 │   ├── config/            configuration schema and loader
-│   ├── science/           determinism, environment, experiment registry
+│   ├── science/           determinism, identity, environment, registry
 │   ├── runtime/           transaction engine, planned
 │   ├── contracts/         ContractIR and compiler, planned
 │   ├── state/             State Fabric, planned
@@ -404,6 +443,10 @@ The essential principles are:
 - [`docs/conventions.md`](docs/conventions.md): working rules and A1-A12 audit
   constraints;
 - [`docs/adr/`](docs/adr/): architecture decisions;
+- [`docs/adr/ADR-0005-identity-protocol-and-tolerances.md`](docs/adr/ADR-0005-identity-protocol-and-tolerances.md):
+  validated horizon-8 protocol and tolerance governance;
+- [`reports/step2_a40_campaign_cost_plan.md`](reports/step2_a40_campaign_cost_plan.md):
+  final A40 sequence, forwards, transfers, and preflight estimates;
 - [`reports/`](reports/): technical and step reports;
 - [`experiments/REGISTRY.md`](experiments/REGISTRY.md): experiment registry.
 

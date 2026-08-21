@@ -41,7 +41,7 @@ MANUAL_PROMPT_IDS = ("audit_echo", "plain_text", "code_completion", "instruction
 def load_prompt_set() -> dict[str, Any]:
     import yaml
 
-    path = REPO_ROOT / "configs" / "reference_prompts.yaml"
+    path = REPO_ROOT / "configs" / "reference_prompts_legacy_v1.yaml"
     raw = path.read_text(encoding="utf-8")
     data = yaml.safe_load(raw)
     data["set_sha256"] = hashlib.sha256(raw.encode("utf-8")).hexdigest()

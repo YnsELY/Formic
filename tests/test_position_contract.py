@@ -31,7 +31,12 @@ import torch
 import formic  # noqa: F401 - applies the torch/transformers environment shim
 from formic.backbone import constants as C
 
-CHECKPOINT = Path("/workspace/Qwen3.8-27B")
+CHECKPOINT = (
+    Path(__file__).resolve().parents[1]
+    / "configs"
+    / "checkpoint_metadata"
+    / "qwen3_8_27b"
+)
 
 
 @pytest.fixture(scope="module")

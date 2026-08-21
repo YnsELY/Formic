@@ -12,6 +12,10 @@ echo "== formic verify (structure + inventory + config, no weights) =="
 python3 -m formic.cli verify
 
 echo
+echo "== SPEC-02 identity mechanics (stock toy model, no weights) =="
+python3 -m formic.cli identity-check --toy
+
+echo
 echo "== weight-free test suite =="
 python3 -m pytest tests/ -q
 

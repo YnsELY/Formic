@@ -24,6 +24,15 @@ def test_default_config_file_loads_and_validates():
     assert config.numerics.cublas_workspace_config == ":4096:8"
     assert config.numerics.warmup_traces_per_shape == 6
     assert config.numerics.measured_traces_per_shape == 2
+    assert config.identity.decode_tokens == 8
+    assert config.identity.accumulation_probe_tokens == 64
+    assert config.identity.exact_gate_repetitions == 2
+    assert config.identity.decode_prompt_ids == (
+        "short_error_assertion",
+        "medium_cache_regression",
+        "long_resume_incidents",
+    )
+    assert config.identity.tolerance_margin_multiplier == 2.0
 
 
 def test_default_config_is_identity_mode():
@@ -150,8 +159,35 @@ def test_decode_stability_policy_is_strict():
         load_config_dict({"numerics": {"cublas_workspace_config": "invalid"}})
 
 
-def test_reference_prompt_set_is_wellformed():
-    data = yaml.safe_load((CONFIGS / "reference_prompts.yaml").read_text(encoding="utf-8"))
+def test_identity_protocol_is_pinned():
+    config = load_config(CONFIGS / "identity.yaml")
+    assert config.numerics.measured_traces_per_shape == 3
+    assert config.identity.ci_segmentations == ("median",)
+    assert config.identity.calibration_segmentations == (
+        "early",
+        "median",
+        "late",
+        "quarters",
+    )
+    assert config.identity.long_calibration_segmentations == ("median", "quarters")
+    assert config.identity.recompute_classes == ("short", "medium")
+    assert config.identity.measurement_repetitions == 3
+    assert config.identity.continuation_seeds == (0, 1, 2)
+    assert set(config.identity.full_boundary_capture_classes) == {"short", "medium"}
+    assert config.identity.final_state_only_classes == ("long",)
+
+    with pytest.raises(ConfigError, match="pinned to 8"):
+        load_config_dict({"identity": {"decode_tokens": 32}})
+    with pytest.raises(ConfigError, match="fixed at 2.0"):
+        load_config_dict({"identity": {"tolerance_margin_multiplier": 1.5}})
+    with pytest.raises(ConfigError, match="cannot be disabled"):
+        load_config_dict({"identity": {"require_top1_agreement": False}})
+
+
+def test_archived_legacy_prompt_source_is_wellformed():
+    data = yaml.safe_load(
+        (CONFIGS / "reference_prompts_legacy_v1.yaml").read_text(encoding="utf-8")
+    )
     assert data["version"] == 1
     ids = [p["id"] for p in data["prompts"]]
     assert len(ids) == len(set(ids))

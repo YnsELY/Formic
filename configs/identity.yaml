@@ -1,0 +1,104 @@
+formic_config_version: 1
+
+run:
+  name: spec-02-identity
+  experiment_id: null
+  seed: 0
+  seeds: [0]
+  deterministic: true
+  notes: "SPEC-02 aligned in-process identity and tolerance calibration"
+
+backbone:
+  checkpoint_path: /workspace/Qwen3.8-27B
+  mode: text_only
+  dtype: bfloat16
+  attn_implementation: eager
+  device_map: auto
+  max_memory:
+    "0": 40GiB
+    cpu: 300GiB
+  strict_inventory: true
+  assert_no_vision_tower: true
+
+thinking:
+  mode: capped
+  cap_tokens: 4096
+  log_scratch: true
+
+sampling:
+  control: greedy
+  payload:
+    do_sample: true
+    temperature: 1.0
+    top_p: 0.95
+    top_k: 20
+  scratch_follows_payload: true
+
+boundaries:
+  enabled_observers: []
+  enabled_insertions: []
+
+flags:
+  snapshot_restore: false
+  transaction_engine: false
+  contract_compiler: false
+  state_fabric: false
+  reference_monitor: false
+  typed_actions: false
+  role_trust_embeddings: false
+  control_token_rows: false
+  decision_slots: false
+  action_head: false
+  pointer_heads: false
+  completion_head: false
+  stop_uncertainty_head: false
+  instruction_echo_probe: false
+  l1_exit_bridge: false
+  l0_exit_bridge: false
+  route_conditional_lora: false
+  anytime_exit_gating: false
+  continue_act_head: false
+  hspc_prefix_cache: false
+  dspd_speculation: false
+  gdn_rollback_protocol: false
+  mtp: false
+  constrained_decoding_fsm: false
+
+generation:
+  max_new_tokens: 128
+  eos_token_ids: [248046, 248044]
+
+numerics:
+  cublas_workspace_config: ":4096:8"
+  cudnn_allow_tf32: false
+  cuda_matmul_allow_tf32: false
+  flash_sdp: false
+  mem_efficient_sdp: false
+  math_sdp: true
+  warmup_traces_per_shape: 6
+  measured_traces_per_shape: 3
+  require_last_two_exact: true
+
+identity:
+  prompt_set_path: configs/reference_prompts.yaml
+  tolerances_path: tolerances.json
+  tolerance_governance_path: configs/tolerance_governance.json
+  verdict_path: reports/identity/latest_verdict.json
+  backbone_hash_path: configs/checkpoint_metadata/qwen3_8_27b/backbone_hash.json
+  decode_tokens: 8
+  accumulation_probe_tokens: 64
+  measurement_repetitions: 3
+  exact_gate_repetitions: 2
+  continuation_seeds: [0, 1, 2]
+  decode_prompt_ids: [short_error_assertion, medium_cache_regression, long_resume_incidents]
+  accumulation_probe_prompt_ids: [short_error_assertion, medium_cache_regression]
+  snapshot_validation_prompt_id: audit_echo
+  tolerance_margin_multiplier: 2.0
+  ci_segmentations: [median]
+  calibration_segmentations: [early, median, late, quarters]
+  long_calibration_segmentations: [median, quarters]
+  recompute_classes: [short, medium]
+  full_boundary_capture_classes: [short, medium]
+  final_state_only_classes: [long]
+  require_top1_agreement: true
+  kl_is_blocking: false
