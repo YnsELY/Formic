@@ -1,8 +1,14 @@
 from __future__ import annotations
 
+import torch
+
 from formic.config.loader import load_config
 from formic.science.identity.campaign_plan import build_campaign_plan
-from formic.science.identity.preflight import PathTiming, _estimate_from_timings
+from formic.science.identity.preflight import (
+    PathTiming,
+    _estimate_from_timings,
+    release_cuda_working_set,
+)
 from formic.science.identity.prompts import load_frozen_corpus
 
 
@@ -33,3 +39,14 @@ def test_preflight_estimate_is_schema_valid_and_informational_for_every_phase():
         "long",
         "accumulation_probe_64",
     ]
+
+
+def test_release_cuda_working_set_flushes_inactive_allocator(monkeypatch):
+    calls = []
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda: calls.append("synchronize"))
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: calls.append("empty_cache"))
+
+    release_cuda_working_set()
+
+    assert calls == ["synchronize", "empty_cache"]

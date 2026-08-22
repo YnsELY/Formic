@@ -14,6 +14,9 @@ change.
   measures representative GPU-to-CPU transfer bandwidth, writes
   `preflight/estimate.json`, displays the informational estimate, then
   continues without a budget cut-off.
+- Transient CUDA workspaces are collected and inactive allocator blocks are
+  released after each complete preflight path and at every phase boundary;
+  cleanup is never performed between measured repetitions.
 - Phase and case artefacts use atomic replace plus a source-hash manifest;
   `--resume` rejects changed commit/config/corpus/backbone sources.
 - The run order is preflight, trace inertness, legacy continuity, noise floor,

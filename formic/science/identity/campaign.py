@@ -45,7 +45,7 @@ from formic.science.identity.executor import (
     run_greedy_pair,
 )
 from formic.science.identity.metrics import compare_logits
-from formic.science.identity.preflight import run_preflight
+from formic.science.identity.preflight import release_cuda_working_set, run_preflight
 from formic.science.identity.prompts import FrozenPrompt, FrozenPromptCorpus, load_frozen_corpus
 from formic.science.identity.protocol import InvalidMeasurement, SharedShapeWarmups
 from formic.science.identity.trace import IdentityTraceCollector
@@ -131,11 +131,17 @@ def run_gpu_campaign(
         session = _MeasurementSession(handle, config)
         session.plan = plan
         _phase_preflight(writer, root, handle, plan)
+        release_cuda_working_set()
         _phase_trace_inertness(writer, session, corpus)
+        release_cuda_working_set()
         _phase_legacy(writer, session, corpus)
+        release_cuda_working_set()
         _phase_noise_floor(writer, session, corpus)
+        release_cuda_working_set()
         _phase_snapshot_restore(writer, session, corpus)
+        release_cuda_working_set()
         continuations = _phase_continuations(writer, session, corpus)
+        release_cuda_working_set()
         calibration = _phase_calibration(
             writer,
             session,
@@ -143,7 +149,9 @@ def run_gpu_campaign(
             continuations,
             sampled_continuation_seed,
         )
+        release_cuda_working_set()
         _phase_probe64(writer, session, corpus, continuations, sampled_continuation_seed)
+        release_cuda_working_set()
         raw_path = root / "calibration" / "raw_measurements.json"
         atomic_write_json(raw_path, {"schema_version": 1, "observations": calibration})
         raw_digest = sha256_bytes(raw_path.read_bytes())

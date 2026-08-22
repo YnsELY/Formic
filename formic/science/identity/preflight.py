@@ -105,7 +105,12 @@ def run_preflight(
             _time_path(endpoint, path, handle.config.identity.decode_tokens),
         )
         timings.append(PathTiming(path, dry, timed))
+        # Release transient workspaces only after the complete path.  Doing it
+        # between measured repetitions would perturb the allocation history
+        # that this protocol intentionally observes.
+        release_cuda_working_set()
     transfer_rate = _measure_transfer_rate(handle.device)
+    release_cuda_working_set()
     elapsed = time.perf_counter() - started
     estimate = _estimate_from_timings(
         timings,
@@ -118,6 +123,21 @@ def run_preflight(
     result = PreflightRun(estimate, tuple(timings), transfer_rate)
     atomic_write_json(details_path, result.to_dict())
     return result
+
+
+def release_cuda_working_set() -> None:
+    """Collect transient tensors and return inactive CUDA blocks to the driver.
+
+    Live model parameters and execution state are not touched.  This helper is
+    used only at path/phase boundaries, never between measured repetitions.
+    """
+    import gc
+    import torch
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+        torch.cuda.empty_cache()
 
 
 def _time_path(endpoint: Endpoint, path: CampaignPath, decode_steps: int) -> float:
@@ -171,6 +191,7 @@ def _measure_transfer_rate(device: Any) -> float:
         torch.cuda.synchronize()
         durations.append(time.perf_counter() - started)
         del destination
+    del source
     elapsed = max(durations)
     if elapsed <= 0:
         raise RuntimeError("GPU-to-CPU timing produced a non-positive duration")
