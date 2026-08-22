@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from formic.backbone.loader import BackboneHandle
 from formic.science.identity.artifacts import atomic_write_json
@@ -88,6 +88,7 @@ def run_preflight(
     *,
     estimate_path: str | Path,
     details_path: str | Path,
+    memory_observer: Callable[[str], None] | None = None,
 ) -> PreflightRun:
     """Time the approved 18 paths without any identity-state capture.
 
@@ -109,8 +110,12 @@ def run_preflight(
         # between measured repetitions would perturb the allocation history
         # that this protocol intentionally observes.
         release_cuda_working_set()
+        if memory_observer is not None:
+            memory_observer(f"after_preflight_path:{path.key}")
     transfer_rate = _measure_transfer_rate(handle.device)
     release_cuda_working_set()
+    if memory_observer is not None:
+        memory_observer("after_preflight_transfer_control")
     elapsed = time.perf_counter() - started
     estimate = _estimate_from_timings(
         timings,

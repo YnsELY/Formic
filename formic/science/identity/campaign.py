@@ -45,6 +45,7 @@ from formic.science.identity.executor import (
     run_greedy_pair,
 )
 from formic.science.identity.metrics import compare_logits
+from formic.science.identity.memory import IncrementalMemoryWriter
 from formic.science.identity.preflight import release_cuda_working_set, run_preflight
 from formic.science.identity.prompts import FrozenPrompt, FrozenPromptCorpus, load_frozen_corpus
 from formic.science.identity.protocol import InvalidMeasurement, SharedShapeWarmups
@@ -100,10 +101,13 @@ def run_gpu_campaign(
     corpus = load_frozen_corpus(_repo_path(config.identity.prompt_set_path))
     plan = build_campaign_plan(config, corpus)
     started_at = _now()
+    memory = IncrementalMemoryWriter(root / "memory" / "cuda_memory.json")
+    memory.record("before_load")
 
     # Exactly one invocation of the production loader occurs in this function.
     handle = loader(config)
     try:
+        memory.record("after_load", handle.model)
         corpus.validate_tokenizer(handle.tokenizer)
         backbone = canonical_backbone_hash(handle.inventory)
         identity = CampaignIdentity(
@@ -128,9 +132,9 @@ def run_gpu_campaign(
                 "sampled_continuation_seed": sampled_continuation_seed,
             },
         )
-        session = _MeasurementSession(handle, config)
+        session = _MeasurementSession(handle, config, memory=memory)
         session.plan = plan
-        _phase_preflight(writer, root, handle, plan)
+        _phase_preflight(writer, root, handle, plan, memory=memory)
         release_cuda_working_set()
         _phase_trace_inertness(writer, session, corpus)
         release_cuda_working_set()
@@ -204,6 +208,8 @@ def _phase_preflight(
     root: Path,
     handle: BackboneHandle,
     plan: CampaignPlan,
+    *,
+    memory: IncrementalMemoryWriter | None = None,
 ) -> None:
     if "preflight" in writer.completed_phases():
         return
@@ -212,6 +218,11 @@ def _phase_preflight(
         plan,
         estimate_path=root / "preflight" / "estimate.json",
         details_path=root / "preflight" / "timings.json",
+        memory_observer=(
+            (lambda label: memory.record(label, handle.model))
+            if memory is not None
+            else None
+        ),
     )
     estimate = report_estimate(run.estimate)
     atomic_write_json(root / "preflight" / "estimate_report.json", estimate.to_dict())
@@ -244,6 +255,9 @@ def _phase_trace_inertness(
             session.trace_off_prefill(prompt)
         pairs = []
         for repetition in range(session.config.identity.exact_gate_repetitions):
+            if not records and repetition == 0 and session.memory is not None:
+                release_cuda_working_set()
+                session.memory.record("before_first_comparison", session.handle.model)
             metric = session.trace_off_on_pair(prompt)
             if not metric.tensor.exact or not metric.top1_agreement:
                 raise CampaignError(
@@ -540,13 +554,20 @@ def _measure_greedy_or_resume(
 
 
 class _MeasurementSession:
-    def __init__(self, handle: BackboneHandle, config: RunConfig) -> None:
+    def __init__(
+        self,
+        handle: BackboneHandle,
+        config: RunConfig,
+        *,
+        memory: IncrementalMemoryWriter | None = None,
+    ) -> None:
         self.handle = handle
         self.config = config
         self.reference = Endpoint("reference", handle.model, handle.view, False)
         self.runner = Endpoint("runner", handle.model, handle.view, True)
         self.warmups = SharedShapeWarmups(config.numerics.warmup_traces_per_shape)
         self.plan: CampaignPlan | None = None
+        self.memory = memory
 
     def warm(self, path: CampaignPath, forced: tuple[int, ...], decode_steps: int) -> int:
         shapes = expected_shapes(
@@ -667,11 +688,13 @@ class _MeasurementSession:
             "repetitions": results,
         }
 
+    @torch.no_grad()
     def trace_off_prefill(self, prompt: FrozenPrompt) -> None:
         device = self.handle.device
         token_ids = torch.tensor([prompt.token_ids], dtype=torch.long, device=device)
         self.handle.model(input_ids=token_ids, use_cache=False)
 
+    @torch.no_grad()
     def trace_off_on_pair(self, prompt: FrozenPrompt):
         device = self.handle.device
         token_ids = torch.tensor([prompt.token_ids], dtype=torch.long, device=device)
@@ -698,6 +721,7 @@ class _MeasurementSession:
         assert collector.last_trace is not None
         return compare_logits(off, collector.last_trace.logits)
 
+    @torch.no_grad()
     def sampled_continuation(self, prompt: FrozenPrompt, seed: int) -> tuple[int, ...]:
         device = self.handle.device
 
@@ -717,6 +741,7 @@ class _MeasurementSession:
         )
         return result.token_ids
 
+    @torch.no_grad()
     def snapshot_restore(self, prompt: FrozenPrompt) -> dict[str, Any]:
         from transformers.cache_utils import DynamicCache
 
