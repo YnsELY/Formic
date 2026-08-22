@@ -6,6 +6,7 @@ from formic.science.identity.executor import (
     AlignedCasePayload,
     expected_shapes,
     run_aligned_pair,
+    run_greedy_pair,
 )
 from formic.science.identity.types import ExecutionMode
 from tests.toy_qwen import toy_model
@@ -100,3 +101,29 @@ def test_long_recompute_decode_is_rejected_by_campaign_scope():
             forced_token_ids=(4, 5),
             capture=False,
         )
+
+
+def test_greedy_pair_forces_reference_tokens_without_a_separate_generation_pass():
+    reference_model = toy_model(seed=44)
+    candidate_model = toy_model(seed=44)
+    reference = Endpoint(
+        "reference", reference_model, HybridGroupView.from_text_config(reference_model.config), False
+    )
+    candidate = Endpoint(
+        "runner", candidate_model, HybridGroupView.from_text_config(candidate_model.config), True
+    )
+    result = run_greedy_pair(
+        reference,
+        candidate,
+        prompt_token_ids=(1, 2, 3, 4),
+        length_class="short",
+        decode_steps=3,
+        capture=True,
+    )
+    assert isinstance(result.payload, AlignedCasePayload)
+    assert len(result.payload.comparisons) == 3
+    assert all(
+        (item.metric.tensor if hasattr(item.metric, "tensor") else item.metric).exact
+        for comparison in result.payload.comparisons
+        for item in comparison.measurements
+    )

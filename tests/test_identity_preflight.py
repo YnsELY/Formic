@@ -1,0 +1,35 @@
+from __future__ import annotations
+
+from formic.config.loader import load_config
+from formic.science.identity.campaign_plan import build_campaign_plan
+from formic.science.identity.preflight import PathTiming, _estimate_from_timings
+from formic.science.identity.prompts import load_frozen_corpus
+
+
+def test_preflight_estimate_is_schema_valid_and_informational_for_every_phase():
+    config = load_config("configs/default.yaml")
+    corpus = load_frozen_corpus("configs/reference_prompts.yaml")
+    plan = build_campaign_plan(config, corpus)
+    timings = [PathTiming(path, 1.0, (1.2, 1.3)) for path in plan.preflight_paths]
+
+    estimate = _estimate_from_timings(
+        timings,
+        model_load_seconds=240.0,
+        preflight_elapsed_seconds=120.0,
+        transfer_bytes_per_second=8 * 2**30,
+    )
+
+    estimate.validate()
+    assert estimate.model_processes == 1
+    assert estimate.preflight_forwards == 207
+    assert [item.name for item in estimate.phases] == [
+        "trace_inertness",
+        "legacy_continuity",
+        "noise_floor",
+        "snapshot_restore",
+        "reference_continuations",
+        "short",
+        "medium",
+        "long",
+        "accumulation_probe_64",
+    ]

@@ -101,3 +101,118 @@ class IncrementalRunWriter:
         if value["schema_version"] != 1 or not isinstance(value["completed"], dict):
             raise ArtifactError("invalid run manifest")
         return value
+
+
+@dataclass(frozen=True)
+class CampaignIdentity:
+    """Sources pinned before the first measured GPU phase.
+
+    ``tolerances.json`` deliberately does not appear here: the first A40 run
+    is a calibration and must not pretend that a threshold table exists before
+    its raw observations have been written and reviewed.
+    """
+
+    protocol: str
+    config_sha256: str
+    corpus_sha256: str
+    git_commit: str
+    backbone_sha256: str
+
+
+class IncrementalCampaignWriter:
+    """Atomic, resumable writer for the complete GPU campaign.
+
+    A phase is committed only after all of its case files have been committed.
+    Resume therefore never treats a partially written phase as complete.
+    """
+
+    def __init__(self, root: str | Path, identity: CampaignIdentity):
+        self.root = Path(root)
+        self.identity = identity
+        self.cases_dir = self.root / "prompts"
+        self.phases_dir = self.root / "phases"
+        self.manifest_path = self.root / "manifest.json"
+        self.cases_dir.mkdir(parents=True, exist_ok=True)
+        self.phases_dir.mkdir(parents=True, exist_ok=True)
+        if self.manifest_path.exists():
+            manifest = self._read_manifest()
+            if manifest["identity"] != identity.__dict__:
+                raise ArtifactError("resume identity differs from existing campaign")
+        else:
+            atomic_write_json(
+                self.manifest_path,
+                {
+                    "schema_version": 1,
+                    "identity": identity.__dict__,
+                    "completed_cases": {},
+                    "completed_phases": {},
+                },
+            )
+
+    def completed_cases(self) -> frozenset[str]:
+        return frozenset(self._read_manifest()["completed_cases"])
+
+    def completed_phases(self) -> frozenset[str]:
+        return frozenset(self._read_manifest()["completed_phases"])
+
+    def write_case(self, case_id: str, payload: dict[str, Any]) -> Path:
+        return self._write(
+            directory=self.cases_dir,
+            manifest_key="completed_cases",
+            item_id=case_id,
+            payload=payload,
+        )
+
+    def write_phase(self, phase: str, payload: dict[str, Any]) -> Path:
+        return self._write(
+            directory=self.phases_dir,
+            manifest_key="completed_phases",
+            item_id=phase,
+            payload=payload,
+        )
+
+    def validate(self) -> None:
+        manifest = self._read_manifest()
+        for key, directory in (
+            ("completed_cases", self.cases_dir),
+            ("completed_phases", self.phases_dir),
+        ):
+            for item_id, expected in manifest[key].items():
+                path = directory / f"{item_id}.json"
+                if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                    raise ArtifactError(f"campaign checkpoint invalid: {key}/{item_id}")
+
+    def _write(
+        self,
+        *,
+        directory: Path,
+        manifest_key: str,
+        item_id: str,
+        payload: dict[str, Any],
+    ) -> Path:
+        if not item_id or any(char in item_id for char in "/\\"):
+            raise ArtifactError("campaign item id must be filename-safe")
+        manifest = self._read_manifest()
+        target = directory / f"{item_id}.json"
+        encoded = canonical_json_bytes(payload)
+        digest = sha256_bytes(encoded)
+        existing = manifest[manifest_key].get(item_id)
+        if existing is not None and existing != digest:
+            raise ArtifactError(f"completed campaign item changed during resume: {item_id}")
+        if existing is not None:
+            if not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != digest:
+                raise ArtifactError(f"campaign checkpoint missing or corrupt: {item_id}")
+            return target
+        atomic_write_json(target, payload)
+        manifest[manifest_key][item_id] = digest
+        atomic_write_json(self.manifest_path, manifest)
+        return target
+
+    def _read_manifest(self) -> dict[str, Any]:
+        value = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        expected = {"schema_version", "identity", "completed_cases", "completed_phases"}
+        if set(value) != expected or value["schema_version"] != 1:
+            raise ArtifactError("invalid campaign manifest schema")
+        if not isinstance(value["completed_cases"], dict) or not isinstance(value["completed_phases"], dict):
+            raise ArtifactError("invalid campaign manifest items")
+        return value

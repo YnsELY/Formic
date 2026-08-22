@@ -286,8 +286,9 @@ baseline.
 
 SPEC-01 (the first step of Part 1) is complete at 9/9.
 SPEC-02, which turns that preliminary evidence into a blocking identity gate
-and adds measured tolerances plus snapshot/restore, is in progress. The local,
-weight-free implementation is complete; the final A40 campaign has not yet run.
+and adds measured tolerances plus snapshot/restore, is in progress. The local
+implementation and the one-process A40 campaign launcher are complete; the
+final A40 calibration has not yet run.
 
 SPEC-02 is currently pinned to the following protocol:
 
@@ -320,6 +321,8 @@ SPEC-02 is currently pinned to the following protocol:
 - the frozen SPEC-02 prompt corpus and strict identity protocol types;
 - the weight-free `identity-check --toy` gate;
 - the post-preflight duration reporter in `scripts/step2_budget_gate.py`;
+- the resumable, single-load A40 calibration launcher in
+  `scripts/step2_a40_campaign.py`;
 - weight-free tests and A11/A12 safeguards.
 
 ### Backbone Validation Status
@@ -376,18 +379,37 @@ python -m formic.cli generate --prompt "..." --chat
 python scripts/step1_acceptance.py --stage all
 ```
 
-The final A40 campaign is launched only from a pod with the checkpoint mounted
-at `/workspace/Qwen3.8-27B`. Its first action is the preflight; the resulting
-estimate is written and displayed by:
+The final A40 calibration is launched only from a clean pod checkout with the
+checkpoint mounted at `/workspace/Qwen3.8-27B` and one visible NVIDIA A40. It
+loads the model exactly once, runs the preflight first, displays the measured
+estimate, and then continues automatically:
 
 ```bash
-python scripts/step2_budget_gate.py \
-  --preflight artifacts/step2/preflight/estimate.json
+python scripts/step2_a40_campaign.py \
+  --run-id a40-YYYY-MM-DD \
+  --sampled-continuation-seed <0|1|2>
 ```
 
-This command has no budget argument and always exits successfully. A real
-campaign must still stop immediately on an identity-gate failure and stop the
-pod before any post-run analysis.
+`--resume` reuses atomically completed cases only when the commit, config,
+corpus and backbone hashes still match. The first run writes raw measurements,
+`tolerances.candidate.json` and `verdict.candidate.json`, then reports
+`CALIBRATION COMPLETE — PROMOTION REQUIRED`; it cannot claim an official PASS
+before human review and promotion of the measured tolerances. The command stops
+on the first hard gate failure. It prints `STOP POD BEFORE ANALYSIS` when it
+returns; stopping the cloud pod itself remains an operator action.
+
+After reviewing the artefacts, prepare a JSON mapping from each bounded
+`mode/point/length_class` key to its human-approved physical justification,
+then materialise a strict `tolerances.json` locally:
+
+```bash
+python scripts/step2_promote_calibration.py \
+  --run-dir artifacts/step2/runs/a40-YYYY-MM-DD \
+  --justifications path/to/justifications.json
+```
+
+Promotion writes neither an ADR, governance record, official verdict nor Git
+commit; those remain explicit human-reviewed actions.
 
 Model loading requires several dozen gigabytes of memory and may take several
 minutes. Decisive measurements must use the checkpoint, configuration, and

@@ -230,7 +230,115 @@ def run_aligned_pair(
     )
 
 
+@torch.no_grad()
+def run_greedy_pair(
+    reference: Endpoint,
+    candidate: Endpoint,
+    *,
+    prompt_token_ids: tuple[int, ...],
+    length_class: str,
+    decode_steps: int,
+    capture: bool,
+) -> PairTrace:
+    """Compare paired cached decoding while forcing reference top-1 tokens.
+
+    Unlike sampled decoding, greedy continuation need not be generated in a
+    separate pre-pass.  Each reference forward selects the next ID and that
+    exact ID is immediately supplied to the candidate at the same decode step.
+    This preserves an aligned, interpretable pair without adding forwards to
+    the approved campaign budget.
+    """
+    if decode_steps <= 0:
+        raise ValueError("greedy decode requires positive decode_steps")
+    from transformers.cache_utils import DynamicCache
+
+    ref_device = next(reference.model.parameters()).device
+    cand_device = next(candidate.model.parameters()).device
+    reference_cache = DynamicCache(config=reference.model.config)
+    candidate_cache = DynamicCache(config=candidate.model.config)
+    reference_input = torch.tensor([prompt_token_ids], dtype=torch.long, device=ref_device)
+    candidate_input = torch.tensor([prompt_token_ids], dtype=torch.long, device=cand_device)
+    ref_frames: list[Frame] = []
+    cand_frames: list[Frame] = []
+    comparisons: list[TraceComparison] = []
+    for step in range(decode_steps):
+        ref_before = int(reference_cache.get_seq_length())
+        cand_before = int(candidate_cache.get_seq_length())
+        if ref_before != cand_before or reference_input.shape != candidate_input.shape:
+            raise RuntimeError("greedy endpoints lost aligned cache/input shapes")
+        shape = InputShape(1, int(reference_input.shape[-1]), ref_before)
+        profile = _capture_profile(length_class, step == decode_steps - 1)
+        if capture:
+            ref_trace = _forward(
+                reference,
+                input_ids=reference_input,
+                cache=reference_cache,
+                profile=profile,
+                capture=True,
+            )
+            assert ref_trace is not None
+            next_id = int(torch.argmax(ref_trace.logits).item())
+        else:
+            outputs = reference.model(
+                input_ids=reference_input,
+                past_key_values=reference_cache,
+                use_cache=True,
+            )
+            next_id = int(torch.argmax(outputs.logits[0, -1]).item())
+        if capture:
+            cand_trace = _forward(
+                candidate,
+                input_ids=candidate_input,
+                cache=candidate_cache,
+                profile=profile,
+                capture=True,
+            )
+            assert cand_trace is not None
+            ref_frames.append(Frame(step, shape, ref_trace))
+            cand_frames.append(Frame(step, shape, cand_trace))
+            comparisons.append(
+                compare_forward_traces(
+                    ref_trace,
+                    cand_trace,
+                    step=step,
+                    mode=ExecutionMode.DECODE_CACHED,
+                    length_class=length_class,
+                    input_shape=shape,
+                )
+            )
+        else:
+            if candidate.through_formic_runner:
+                identity_forward(
+                    SimpleNamespace(model=candidate.model),
+                    input_ids=candidate_input,
+                    past_key_values=candidate_cache,
+                    use_cache=True,
+                )
+            else:
+                candidate.model(
+                    input_ids=candidate_input,
+                    past_key_values=candidate_cache,
+                    use_cache=True,
+                )
+        reference_input = torch.tensor([[next_id]], dtype=torch.long, device=ref_device)
+        candidate_input = torch.tensor([[next_id]], dtype=torch.long, device=cand_device)
+    if not capture:
+        return PairTrace("", "", None, 0)
+    ref_path = PathTrace(reference.name, tuple(ref_frames))
+    cand_path = PathTrace(candidate.name, tuple(cand_frames))
+    ref_fingerprint, ref_count = path_fingerprint(ref_path)
+    cand_fingerprint, cand_count = path_fingerprint(cand_path)
+    return PairTrace(
+        ref_fingerprint,
+        cand_fingerprint,
+        AlignedCasePayload(ref_path, cand_path, tuple(comparisons)),
+        ref_count + cand_count,
+    )
+
+
 def _capture_profile(length_class: str, is_final: bool) -> CaptureProfile:
+    if length_class == "legacy":
+        return CaptureProfile.LOGITS_ONLY
     if length_class in ("short", "medium"):
         return CaptureProfile.FULL_BOUNDARIES
     if length_class == "long":

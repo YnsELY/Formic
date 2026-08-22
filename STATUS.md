@@ -33,7 +33,7 @@ Reference documents, in order of authority: the checkpoint audit
 | 6 | Hybrid group view, 16×(3 GDN + 1 attention) (A11) | 1 | VALIDÉE | `formic/backbone/groups.py`, `tests/test_groups.py` |
 | 7 | 17 inert boundary insertion points | 1 | VALIDÉE | `formic/backbone/boundaries.py`, `tests/test_boundaries.py` |
 | 8 | Native generation through Formic (greedy + sampled) | 1 | VALIDÉE | `formic/backbone/runner.py`, `artifacts/step1/` |
-| 9 | Identity baseline + numeric tolerances (E4) | 2 | EN COURS | ADR-0005 PROPOSED; corpus v2 gelé; plan A40 horizon 8 en validation |
+| 9 | Identity baseline + numeric tolerances (E4) | 2 | EN COURS | ADR-0005 PROPOSED; corpus v2 gelé; launcher A40 monoprocessus prêt, calibration réelle en attente |
 | 10 | Snapshot / restore / fork primitive | 2 | EN COURS | `formic/state/` |
 | 11 | Evaluation harness + pinned baselines (E1) | 3 | À VENIR | — |
 | 12 | ContractIR + three-pass compiler | 4 | À VENIR | — |

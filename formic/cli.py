@@ -197,6 +197,10 @@ def cmd_generate(args: argparse.Namespace) -> int:
 def cmd_identity_check(args: argparse.Namespace) -> int:
     """Run the local toy gate or verify the latest committed GPU PASS."""
     try:
+        if args.gpu:
+            result = _run_gpu_identity_check(args)
+            print(f"IDENTITY CHECK: {result.message}")
+            return 0 if result.completed else 1
         if args.toy:
             _run_toy_identity_check()
         else:
@@ -207,6 +211,24 @@ def cmd_identity_check(args: argparse.Namespace) -> int:
         return 1
     print("IDENTITY CHECK: PASS")
     return 0
+
+
+def _run_gpu_identity_check(args: argparse.Namespace):
+    """Launch the one-process A40 calibration; never loads weights in CI."""
+    from formic.science.identity.campaign import run_gpu_campaign
+
+    if not args.run_id:
+        raise ValueError("--run-id is required with --gpu")
+    if any(char in args.run_id for char in "/\\"):
+        raise ValueError("--run-id must be filename-safe")
+    if args.sampled_continuation_seed is None:
+        raise ValueError("--sampled-continuation-seed is required with --gpu")
+    return run_gpu_campaign(
+        _load(args.config),
+        run_root=REPO_ROOT / "artifacts" / "step2" / "runs" / args.run_id,
+        sampled_continuation_seed=args.sampled_continuation_seed,
+        resume=args.resume,
+    )
 
 
 def _run_toy_identity_check() -> None:
@@ -329,11 +351,24 @@ def build_parser() -> argparse.ArgumentParser:
         "identity-check",
         help="blocking identity verdict (latest GPU PASS, or --toy locally)",
     )
-    p.add_argument(
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument(
         "--toy",
         action="store_true",
         help="run the weight-free end-to-end mechanism check",
     )
+    mode.add_argument(
+        "--gpu",
+        action="store_true",
+        help="run the final A40 calibration campaign (manual gate)",
+    )
+    p.add_argument("--run-id", help="immutable campaign identifier for --gpu")
+    p.add_argument(
+        "--sampled-continuation-seed",
+        type=int,
+        help="one reviewed seed from identity.continuation_seeds, required for --gpu",
+    )
+    p.add_argument("--resume", action="store_true", help="resume an interrupted --gpu run")
     p.set_defaults(func=cmd_identity_check)
 
     return parser
