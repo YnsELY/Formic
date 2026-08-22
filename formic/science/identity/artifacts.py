@@ -131,9 +131,14 @@ class IncrementalCampaignWriter:
         self.identity = identity
         self.cases_dir = self.root / "prompts"
         self.phases_dir = self.root / "phases"
+        # Diagnostics are deliberately outside the resumable manifest: they
+        # are updated after each measured repetition, including for a case
+        # that is invalid and must therefore never be marked completed.
+        self.diagnostics_dir = self.root / "diagnostics"
         self.manifest_path = self.root / "manifest.json"
         self.cases_dir.mkdir(parents=True, exist_ok=True)
         self.phases_dir.mkdir(parents=True, exist_ok=True)
+        self.diagnostics_dir.mkdir(parents=True, exist_ok=True)
         if self.manifest_path.exists():
             manifest = self._read_manifest()
             if manifest["identity"] != identity.__dict__:
@@ -170,6 +175,20 @@ class IncrementalCampaignWriter:
             item_id=phase,
             payload=payload,
         )
+
+    def write_diagnostic(self, case_id: str, payload: dict[str, Any]) -> Path:
+        """Atomically replace the latest partial measurement for ``case_id``.
+
+        Unlike a completed case this record may change as repetitions arrive.
+        It is intentionally not resumable evidence and never advances the
+        manifest, but it makes a stability failure inspectable after the GPU
+        process exits.
+        """
+        if not case_id or any(char in case_id for char in "/\\"):
+            raise ArtifactError("campaign item id must be filename-safe")
+        target = self.diagnostics_dir / f"{case_id}.json"
+        atomic_write_json(target, payload)
+        return target
 
     def validate(self) -> None:
         manifest = self._read_manifest()

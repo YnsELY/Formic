@@ -1,7 +1,6 @@
 # SPEC-02 — GPU campaign launcher (local implementation report)
 
-**Status:** implementation complete; no A40 measurement has been run by this
-change.
+**Status:** implementation complete; the A40 calibration remains incomplete.
 
 ## Delivered
 
@@ -28,6 +27,23 @@ change.
 - `scripts/step2_promote_calibration.py` requires explicit human
   justifications for bounded rows before it can materialise a strict
   `tolerances.json`. It does not alter ADR status, governance, verdicts or Git.
+
+## A40 incident follow-up
+
+- Run `a40-2026-08-22-r2` exhausted CUDA memory before its first measured
+  comparison. The follow-up records allocator headroom around every preflight
+  path and disables autograd in control-only forwards.
+- Run `a40-2026-08-22-r3` reached the legacy continuity phase without an OOM,
+  then stopped with `InvalidMeasurement` because the final two
+  `legacy__audit_echo` traces were not stable. This is a measured observation,
+  not a root-cause attribution.
+- Each measured repetition now atomically updates a non-authoritative
+  diagnostic artefact. If stability or an exact gate fails, the terminal error,
+  per-repetition reference/runner fingerprints, metrics, and failure memory
+  observation remain available even though the case is not marked complete.
+- `scripts/step2_legacy_stability_probe.py` is a deliberately narrow A40
+  diagnostic control for that one pinned legacy case. It is not a calibration
+  or an identity verdict.
 
 ## Local verification
 

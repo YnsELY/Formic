@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
 import torch
 
 from formic.science.identity.artifacts import ArtifactError, CampaignIdentity, IncrementalCampaignWriter
-from formic.science.identity.campaign import _MeasurementSession
+from formic.science.identity.campaign import _MeasurementSession, _measure_or_resume, _stability_details
+from formic.science.identity.protocol import InvalidMeasurement
+from formic.science.identity.types import SamplingMode
 
 
 def _identity() -> CampaignIdentity:
@@ -38,6 +41,62 @@ def test_campaign_writer_refuses_resume_against_different_sources(tmp_path):
     changed = CampaignIdentity(**{**_identity().__dict__, "backbone_sha256": "e" * 64})
     with pytest.raises(ArtifactError, match="resume identity"):
         IncrementalCampaignWriter(tmp_path / "run", changed)
+
+
+def test_campaign_writer_persists_mutable_diagnostic_without_completing_case(tmp_path):
+    writer = IncrementalCampaignWriter(tmp_path / "run", _identity())
+    writer.write_diagnostic("legacy__audit_echo", {"status": "MEASURING", "repetitions": [0]})
+    writer.write_diagnostic("legacy__audit_echo", {"status": "FAILED", "repetitions": [0, 1]})
+
+    payload = json.loads((writer.diagnostics_dir / "legacy__audit_echo.json").read_text())
+    assert payload == {"status": "FAILED", "repetitions": [0, 1]}
+    assert writer.completed_cases() == frozenset()
+
+
+def test_measurement_failure_persists_last_repetition_diagnostic(tmp_path):
+    class FailingSession:
+        def measure_forced(self, **kwargs):
+            kwargs["repetition_observer"](
+                {
+                    "schema_version": 1,
+                    "status": "MEASURING",
+                    "case_id": "legacy__audit_echo",
+                    "stability": {"last_two_exact": False},
+                }
+            )
+            raise InvalidMeasurement("last two measured traces are unstable")
+
+    writer = IncrementalCampaignWriter(tmp_path / "run", _identity())
+    with pytest.raises(InvalidMeasurement, match="unstable"):
+        _measure_or_resume(
+            writer,
+            "legacy__audit_echo",
+            "legacy_continuity",
+            FailingSession(),
+            object(),
+            forced_token_ids=(),
+            repetitions=3,
+            sampling=SamplingMode.GREEDY,
+            continuation_seed=None,
+            exact_required=True,
+        )
+
+    payload = json.loads((writer.diagnostics_dir / "legacy__audit_echo.json").read_text())
+    assert payload["status"] == "FAILED"
+    assert payload["failure"]["exception"] == "InvalidMeasurement"
+    assert payload["stability"]["last_two_exact"] is False
+
+
+def test_stability_details_identify_first_changed_repetition():
+    details = _stability_details([("ref-a", "run-a"), ("ref-a", "run-a"), ("ref-b", "run-b")])
+
+    assert details["last_two_exact"] is False
+    assert details["first_changed_repetition"] == 2
+    assert details["fingerprints"][2] == {
+        "repetition": 2,
+        "reference_fingerprint": "ref-b",
+        "candidate_fingerprint": "run-b",
+    }
 
 
 def test_trace_inertness_warmup_disables_autograd():

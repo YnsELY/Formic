@@ -194,6 +194,14 @@ def run_gpu_campaign(
             verdict,
         )
     except Exception as exc:
+        # Preserve the allocator state at the point of failure.  This is a
+        # diagnostic observation only; it does not keep the run alive or
+        # alter the identity protocol.
+        try:
+            memory.record("on_failure", handle.model)
+            memory.write_live_summary(handle.model)
+        except Exception:
+            pass
         _write_failure(root, exc)
         raise
     finally:
@@ -523,19 +531,43 @@ def _measure_or_resume(
 ) -> dict[str, Any]:
     if case_id in writer.completed_cases():
         return _read_case(writer, case_id)
-    payload = session.measure_forced(
-        case_id=case_id,
-        phase=phase,
-        path=path,
-        forced_token_ids=forced_token_ids,
-        repetitions=repetitions,
-        sampling=sampling,
-        continuation_seed=continuation_seed,
-        exact_required=exact_required,
-        endpoints=endpoints,
-        logits_only=logits_only,
-        decode_steps=decode_steps,
-    )
+    latest: dict[str, Any] = {
+        "schema_version": 1,
+        "status": "STARTED",
+        "phase": phase,
+        "case_id": case_id,
+    }
+
+    def observe(payload: dict[str, Any]) -> None:
+        nonlocal latest
+        latest = payload
+        writer.write_diagnostic(case_id, latest)
+
+    try:
+        payload = session.measure_forced(
+            case_id=case_id,
+            phase=phase,
+            path=path,
+            forced_token_ids=forced_token_ids,
+            repetitions=repetitions,
+            sampling=sampling,
+            continuation_seed=continuation_seed,
+            exact_required=exact_required,
+            endpoints=endpoints,
+            logits_only=logits_only,
+            decode_steps=decode_steps,
+            repetition_observer=observe,
+        )
+    except Exception as exc:
+        writer.write_diagnostic(
+            case_id,
+            {
+                **latest,
+                "status": "FAILED",
+                "failure": {"exception": type(exc).__name__, "message": str(exc)},
+            },
+        )
+        raise
     writer.write_case(case_id, payload)
     return payload
 
@@ -548,7 +580,30 @@ def _measure_greedy_or_resume(
     case_id = f"calibration__{path.key}__greedy"
     if case_id in writer.completed_cases():
         return _read_case(writer, case_id)
-    payload = session.measure_greedy(case_id, path)
+    latest: dict[str, Any] = {
+        "schema_version": 1,
+        "status": "STARTED",
+        "phase": path.prompt.length_class,
+        "case_id": case_id,
+    }
+
+    def observe(payload: dict[str, Any]) -> None:
+        nonlocal latest
+        latest = payload
+        writer.write_diagnostic(case_id, latest)
+
+    try:
+        payload = session.measure_greedy(case_id, path, repetition_observer=observe)
+    except Exception as exc:
+        writer.write_diagnostic(
+            case_id,
+            {
+                **latest,
+                "status": "FAILED",
+                "failure": {"exception": type(exc).__name__, "message": str(exc)},
+            },
+        )
+        raise
     writer.write_case(case_id, payload)
     return payload
 
@@ -604,6 +659,7 @@ class _MeasurementSession:
         endpoints: tuple[Endpoint, Endpoint] | None,
         logits_only: bool,
         decode_steps: int | None,
+        repetition_observer: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         steps = decode_steps or self.config.identity.decode_tokens
         warm_forced = forced_token_ids or timing_continuation(path.prompt, steps)
@@ -636,20 +692,42 @@ class _MeasurementSession:
                     logits_only=logits_only,
                 )
             )
+            if repetition_observer is not None:
+                repetition_observer(
+                    _measurement_payload(
+                        status="MEASURING",
+                        phase=phase,
+                        case_id=case_id,
+                        prompt_id=path.prompt.id,
+                        warmups=warmups,
+                        results=results,
+                        fingerprints=fingerprints,
+                    )
+                )
             del pair
         _assert_stable(fingerprints, case_id)
         if exact_required:
             _assert_exact(results, case_id)
-        return {
-            "schema_version": 1,
-            "phase": phase,
-            "case_id": case_id,
-            "prompt_id": path.prompt.id,
-            "warmup_paths": warmups,
-            "repetitions": results,
-        }
+        payload = _measurement_payload(
+            status="COMPLETE",
+            phase=phase,
+            case_id=case_id,
+            prompt_id=path.prompt.id,
+            warmups=warmups,
+            results=results,
+            fingerprints=fingerprints,
+        )
+        if repetition_observer is not None:
+            repetition_observer(payload)
+        return payload
 
-    def measure_greedy(self, case_id: str, path: CampaignPath) -> dict[str, Any]:
+    def measure_greedy(
+        self,
+        case_id: str,
+        path: CampaignPath,
+        *,
+        repetition_observer: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         steps = self.config.identity.decode_tokens
         warmups = self.warm(path, timing_continuation(path.prompt, steps), steps)
         results: list[dict[str, Any]] = []
@@ -677,16 +755,32 @@ class _MeasurementSession:
                     logits_only=False,
                 )
             )
+            if repetition_observer is not None:
+                repetition_observer(
+                    _measurement_payload(
+                        status="MEASURING",
+                        phase=path.prompt.length_class,
+                        case_id=case_id,
+                        prompt_id=path.prompt.id,
+                        warmups=warmups,
+                        results=results,
+                        fingerprints=fingerprints,
+                    )
+                )
             del pair
         _assert_stable(fingerprints, case_id)
-        return {
-            "schema_version": 1,
-            "phase": path.prompt.length_class,
-            "case_id": case_id,
-            "prompt_id": path.prompt.id,
-            "warmup_paths": warmups,
-            "repetitions": results,
-        }
+        payload = _measurement_payload(
+            status="COMPLETE",
+            phase=path.prompt.length_class,
+            case_id=case_id,
+            prompt_id=path.prompt.id,
+            warmups=warmups,
+            results=results,
+            fingerprints=fingerprints,
+        )
+        if repetition_observer is not None:
+            repetition_observer(payload)
+        return payload
 
     @torch.no_grad()
     def trace_off_prefill(self, prompt: FrozenPrompt) -> None:
@@ -803,6 +897,60 @@ class _MeasurementSession:
         }
 
 
+def _measurement_payload(
+    *,
+    status: str,
+    phase: str,
+    case_id: str,
+    prompt_id: str,
+    warmups: int,
+    results: list[dict[str, Any]],
+    fingerprints: list[tuple[str, str]],
+) -> dict[str, Any]:
+    """Serialise measured repetitions plus their cross-repetition evidence."""
+    return {
+        "schema_version": 1,
+        "status": status,
+        "phase": phase,
+        "case_id": case_id,
+        "prompt_id": prompt_id,
+        "warmup_paths": warmups,
+        "repetitions": list(results),
+        "stability": _stability_details(fingerprints),
+    }
+
+
+def _stability_details(fingerprints: list[tuple[str, str]]) -> dict[str, Any]:
+    """Return diagnostic evidence for the pinned last-two-traces assertion."""
+    entries = [
+        {
+            "repetition": index,
+            "reference_fingerprint": reference,
+            "candidate_fingerprint": candidate,
+        }
+        for index, (reference, candidate) in enumerate(fingerprints)
+    ]
+    last_two_exact = (
+        None
+        if len(fingerprints) < 2
+        else fingerprints[-2] == fingerprints[-1]
+    )
+    first_changed = next(
+        (
+            index
+            for index in range(1, len(fingerprints))
+            if fingerprints[index] != fingerprints[index - 1]
+        ),
+        None,
+    )
+    return {
+        "assertion": "last_two_pairs_exact",
+        "last_two_exact": last_two_exact,
+        "first_changed_repetition": first_changed,
+        "fingerprints": entries,
+    }
+
+
 def _pair_to_observation(
     pair: Any,
     *,
@@ -861,7 +1009,11 @@ def _serialise_comparison(comparison: TraceComparison, *, logits_only: bool) -> 
 
 def _assert_stable(fingerprints: list[tuple[str, str]], case_id: str) -> None:
     if len(fingerprints) < 2 or fingerprints[-1] != fingerprints[-2]:
-        raise InvalidMeasurement(f"last two measured traces are unstable: {case_id}")
+        details = _stability_details(fingerprints)
+        raise InvalidMeasurement(
+            f"last two measured traces are unstable: {case_id}; "
+            f"first_changed_repetition={details['first_changed_repetition']}"
+        )
 
 
 def _assert_exact(results: Iterable[dict[str, Any]], case_id: str) -> None:
