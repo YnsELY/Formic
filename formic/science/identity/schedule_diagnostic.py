@@ -1,4 +1,4 @@
-"""Memory-bounded execution calendars for the legacy SPEC-02 diagnostic.
+"""Memory-bounded execution calendars for isolated SPEC-02 diagnostics.
 
 This module is deliberately isolated from the production identity executor. It
 uses stock model forwards and fresh configured caches (A1/A2), never restores or
@@ -19,9 +19,10 @@ from formic.science.identity.executor import Endpoint
 from formic.science.identity.metrics import compare_logits
 
 
-Calendar = Literal["sequential", "alternating"]
+Calendar = Literal["sequential", "alternating", "abba", "baab"]
 ScalarObserver = Callable[[dict[str, Any]], None]
 MemoryObserver = Callable[[str], None]
+CPULogitsObserver = Callable[[dict[str, Any], torch.Tensor], None]
 
 
 @torch.no_grad()
@@ -35,9 +36,10 @@ def run_schedule_pair(
     capture: bool,
     event_observer: ScalarObserver | None = None,
     memory_observer: MemoryObserver | None = None,
+    cpu_logits_observer: CPULogitsObserver | None = None,
 ) -> dict[str, Any] | None:
     """Run one fresh-cache pair without retaining CUDA outputs or traces."""
-    if calendar not in ("sequential", "alternating"):
+    if calendar not in ("sequential", "alternating", "abba", "baab"):
         raise ValueError(f"unknown calendar: {calendar}")
     if not forced_token_ids:
         raise ValueError("cached decode requires a forced continuation")
@@ -70,47 +72,52 @@ def run_schedule_pair(
     cache_storage_disjoint = True
     autograd_disabled = True
 
-    order = (
-        [(side, step) for side in ("left", "right") for step in range(len(forced_token_ids))]
-        if calendar == "sequential"
-        else [(side, step) for step in range(len(forced_token_ids)) for side in ("left", "right")]
-    )
+    order = _forward_order(calendar, len(forced_token_ids))
     try:
-        for side, step in order:
+        for pair_local_ordinal, (side, step, within_step_ordinal) in enumerate(order):
             current_grad = torch.is_grad_enabled()
             autograd_disabled = autograd_disabled and not current_grad
             if current_grad:
                 raise RuntimeError(f"autograd enabled for {side} step {step}")
             output = _call_endpoint(endpoints[side], inputs[side], caches[side])
-            forward_order.append({"side": side, "step": step})
+            metadata = _forward_metadata(
+                calendar=calendar,
+                endpoint=endpoints[side].name,
+                side=side,
+                step=step,
+                pair_local_ordinal=pair_local_ordinal,
+                within_step_ordinal=within_step_ordinal,
+            )
+            forward_order.append(metadata)
             _observe(
                 event_observer,
                 event="after_endpoint",
-                side=side,
-                step=step,
+                **metadata,
                 grad_enabled=current_grad,
                 cache_object_id=cache_object_ids[side],
             )
             if memory_observer is not None:
                 memory_observer(f"after_{side}_step_{step}")
 
-            if capture:
+            if capture or cpu_logits_observer is not None:
                 logits_cpu = output.logits[0, -1].detach().to("cpu").contiguous()
-                cpu_logits[side].append(logits_cpu)
-                records[side].append(_logit_record(logits_cpu))
+                if cpu_logits_observer is not None:
+                    cpu_logits_observer(dict(metadata), logits_cpu)
+                if capture:
+                    cpu_logits[side].append(logits_cpu)
+                    records[side].append(_logit_record(logits_cpu, metadata))
             del output
             _observe(
                 event_observer,
                 event="after_output_deleted",
-                side=side,
-                step=step,
+                **metadata,
                 grad_enabled=torch.is_grad_enabled(),
                 cache_object_id=cache_object_ids[side],
             )
             if memory_observer is not None:
                 memory_observer(f"after_{side}_step_{step}_output_deleted")
 
-            if side == "right" or calendar == "sequential":
+            if calendar == "sequential" or within_step_ordinal == 1:
                 left_storage = _cache_storage_pointers(left_cache)
                 right_storage = _cache_storage_pointers(right_cache)
                 cache_storage_disjoint = cache_storage_disjoint and not bool(
@@ -191,11 +198,55 @@ def _call_endpoint(endpoint: Endpoint, input_ids: torch.Tensor, cache: Any) -> A
     return endpoint.model(**kwargs)
 
 
-def _logit_record(logits_cpu: torch.Tensor) -> dict[str, Any]:
+def _forward_order(calendar: Calendar, steps: int) -> list[tuple[str, int, int]]:
+    if calendar == "sequential":
+        return [
+            (side, step, 0 if side == "left" else 1)
+            for side in ("left", "right")
+            for step in range(steps)
+        ]
+    if calendar == "alternating":
+        first_sides = ("left",) * steps
+    else:
+        pattern = (
+            ("left", "right", "right", "left")
+            if calendar == "abba"
+            else ("right", "left", "left", "right")
+        )
+        first_sides = tuple(pattern[step % len(pattern)] for step in range(steps))
+    return [
+        (side, step, within)
+        for step, first in enumerate(first_sides)
+        for within, side in enumerate((first, "right" if first == "left" else "left"))
+    ]
+
+
+def _forward_metadata(
+    *,
+    calendar: Calendar,
+    endpoint: str,
+    side: str,
+    step: int,
+    pair_local_ordinal: int,
+    within_step_ordinal: int,
+) -> dict[str, Any]:
+    return {
+        "calendar": calendar,
+        "endpoint": endpoint,
+        "side": side,
+        "decode_step": step,
+        "step": step,
+        "pair_local_forward_ordinal": pair_local_ordinal,
+        "within_step_ordinal": within_step_ordinal,
+    }
+
+
+def _logit_record(logits_cpu: torch.Tensor, metadata: dict[str, Any]) -> dict[str, Any]:
     if logits_cpu.device.type != "cpu" or logits_cpu.requires_grad:
         raise RuntimeError("diagnostic logits must be detached on CPU")
     raw = logits_cpu.reshape(-1).view(torch.uint8)
     return {
+        **metadata,
         "sha256": hashlib.sha256(memoryview(raw.numpy())).hexdigest(),
         "top1": int(torch.argmax(logits_cpu).item()),
         "shape": list(logits_cpu.shape),
