@@ -540,7 +540,10 @@ def _enrich_result(result: dict[str, Any], configuration: Any, repetition: int) 
 
 
 def _last_two_checks(bank: Any, configuration: Any) -> list[dict[str, Any]]:
-    from formic.science.identity.crossover_diagnostic import MEASURED_REPETITIONS
+    from formic.science.identity.crossover_diagnostic import (
+        MEASURED_REPETITIONS,
+        stability_against_prior,
+    )
 
     prior_repetition = MEASURED_REPETITIONS - 2
     current_repetition = MEASURED_REPETITIONS - 1

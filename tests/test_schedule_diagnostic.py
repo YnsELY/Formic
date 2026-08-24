@@ -29,6 +29,7 @@ from formic.science.identity.crossover_diagnostic import (
     round_relative_global_forward_ordinal,
     validate_balanced_design,
 )
+from scripts.step2_balanced_crossover import _last_two_checks
 from tests.toy_qwen import toy_model
 
 
@@ -290,6 +291,52 @@ def test_process_lifetime_diagnostic_ordinal_boundaries_include_warmups():
     assert process_lifetime_diagnostic_forward_ordinal(0, 7, 2, 15) == 479
     assert process_lifetime_diagnostic_forward_ordinal(1, 0, 0, 0) == 480
     assert process_lifetime_diagnostic_forward_ordinal(7, 7, 2, 15) == 3167
+
+
+def test_last_two_checks_executes_with_module_scoped_stability_helper():
+    configuration = round_configurations(0)[0]
+    bank = CPULogitBank()
+    order = {
+        (side, step): (local, within)
+        for local, (side, step, within) in enumerate(
+            schedule_diagnostic._forward_order(configuration.calendar, 8)
+        )
+    }
+    for repetition in (1, 2):
+        for side in ("left", "right"):
+            for step in range(8):
+                local, within = order[(side, step)]
+                metadata = {
+                    "calendar": configuration.calendar,
+                    "round": configuration.round,
+                    "configuration_ordinal": configuration.configuration_ordinal,
+                    "pair": configuration.pair,
+                    "repetition": repetition,
+                    "endpoint": "reference",
+                    "side": side,
+                    "decode_step": step,
+                    "within_step_ordinal": within,
+                    "pair_local_forward_ordinal": local,
+                    "round_relative_global_forward_ordinal": (
+                        round_relative_global_forward_ordinal(
+                            configuration.configuration_ordinal, repetition, local
+                        )
+                    ),
+                    "process_lifetime_diagnostic_forward_ordinal": (
+                        process_lifetime_diagnostic_forward_ordinal(
+                            configuration.round,
+                            configuration.configuration_ordinal,
+                            repetition,
+                            local,
+                        )
+                    ),
+                }
+                bank.add(metadata, torch.tensor([1.0, 2.0]))
+
+    checks = _last_two_checks(bank, configuration)
+
+    assert len(checks) == 16
+    assert all(item["exact"] is True for item in checks)
 
 
 def test_matched_slot_evidence_records_distinct_process_positions_across_rounds():
