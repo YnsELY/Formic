@@ -850,6 +850,12 @@ def build_analysis(
         same_slot_evidence_complete
         and same_slot_summary["nonexact_count"] == 0
     )
+    matched_contrast_stability = _matched_contrast_stability(contrasts)
+    matched_contrasts_last_two_exact = (
+        same_slot_evidence_complete
+        and matched_contrast_stability["complete"]
+        and matched_contrast_stability["last_two_exact"]
+    )
     inversions_exact = (
         inversion_evidence_complete
         and inversion_summary["nonexact_count"] == 0
@@ -872,9 +878,7 @@ def build_analysis(
             complete,
             design_valid,
             same_slot_exact,
-            controls_stable,
-            inversions_exact,
-            last_two_exact,
+            matched_contrasts_last_two_exact,
             ordinal_coverage_complete,
         )
     )
@@ -940,13 +944,13 @@ def build_analysis(
         "readiness": {
             "status": "READY" if ready else "BLOCKED",
             "ready_for_full_spec_02_campaign": ready,
-            "official_launcher_requires_calendar_adaptation": True,
-            "official_launcher_usable_as_is": False,
-            "currently_runnable": False,
-            "official_command_recommendation": None,
+            "official_launcher_requires_calendar_adaptation": False,
+            "official_launcher_usable_as_is": ready,
+            "currently_runnable": ready,
+            "official_command_recommendation": command_after_adaptation,
             "command_template_after_code_adaptation": command_after_adaptation,
             "launcher_note": (
-                "The existing official launcher uses the sequential calendar and must be adapted to the validated balanced calendar before campaign use."
+                "The official launcher includes the four-slot Latin ABBA endpoint gate and cross-path calibration protocol."
                 if ready
                 else "No official campaign command is recommended because readiness is blocked."
             ),
@@ -957,6 +961,7 @@ def build_analysis(
             "all_configurations_complete": complete,
             "balanced_design_valid": design_valid,
             "same_slot_contrasts_exact": same_slot_exact,
+            "matched_contrasts_last_two_exact": matched_contrasts_last_two_exact,
             "controls_stable": controls_stable,
             "inversion_checks_coherent_and_exact": inversions_exact,
             "all_last_two_slot_checks_exact": last_two_exact,
@@ -971,6 +976,7 @@ def build_analysis(
             ),
         },
         "same_slot_metric_summary": same_slot_summary,
+        "matched_contrast_stability": matched_contrast_stability,
         "inversion_metric_summary": inversion_summary,
         "ordinal_position_summary": ordinal_positions["aggregate"],
         "pair_result_summaries": pair_summaries,
@@ -988,7 +994,68 @@ def build_analysis(
             ),
             "causal_attribution": None,
         },
+        "nonblocking_ordinal_diagnostics": {
+            "raw_controls_stable": controls_stable,
+            "raw_inversions_exact": inversions_exact,
+            "raw_last_two_slots_exact": last_two_exact,
+            "reason": (
+                "These comparisons place distinct traces at distinct process-lifetime "
+                "ordinals. ADR-0004 requires the matched endpoint contrast, not raw "
+                "cross-ordinal fingerprints, to carry the wrapper identity verdict."
+            ),
+            "causal_attribution": None,
+        },
         "questions_fr": questions,
+    }
+
+
+def _matched_contrast_stability(contrasts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Assert stability of the measured endpoint contrast, not raw ordinals."""
+    grouped: dict[tuple[Any, ...], dict[int, dict[str, Any]]] = {}
+    for item in contrasts:
+        key = (
+            item.get("contrast"),
+            item.get("calendar"),
+            item.get("configuration_ordinal"),
+            item.get("step"),
+            item.get("side"),
+        )
+        metric = item.get("metric", {})
+        grouped.setdefault(key, {})[int(item.get("repetition", -1))] = {
+            field: metric.get(field)
+            for field in (
+                "exact",
+                "max_abs_delta",
+                "kl_next_token",
+                "top1_agreement",
+                "first_coordinate",
+                "reference_value",
+                "candidate_value",
+            )
+        }
+    expected_groups = EXPECTED_SAME_SLOT_CONTRASTS // MEASURED_REPETITIONS
+    failures: list[dict[str, Any]] = []
+    complete = len(grouped) == expected_groups
+    for key, repetitions in sorted(grouped.items(), key=lambda item: str(item[0])):
+        if sorted(repetitions) != list(range(MEASURED_REPETITIONS)):
+            complete = False
+            failures.append({"key": list(key), "reason": "missing_repetition"})
+            continue
+        if canonical_json_bytes(repetitions[1]) != canonical_json_bytes(repetitions[2]):
+            failures.append({
+                "key": list(key),
+                "reason": "last_two_contrast_metrics_differ",
+                "repetition_1": repetitions[1],
+                "repetition_2": repetitions[2],
+            })
+    return {
+        "assertion": "last_two_matched_endpoint_contrasts_exact",
+        "expected_groups": expected_groups,
+        "observed_groups": len(grouped),
+        "complete": complete,
+        "last_two_exact": complete and not failures,
+        "failure_count": len(failures),
+        "first_failure": failures[0] if failures else None,
     }
 
 

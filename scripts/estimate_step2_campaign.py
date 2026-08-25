@@ -20,6 +20,7 @@ from formic.science.identity.segmentation import segment_slices
 
 WARMUP_TRACES = 6
 MEASUREMENT_REPETITIONS = 3
+EXACT_GATE_REPETITIONS = 2
 ENDPOINTS = 2
 DECODE_STEPS = 8
 
@@ -139,6 +140,40 @@ def _frames(
     raise ValueError(path)
 
 
+def _reference_frames(
+    prompt: Prompt,
+    path: str,
+    segmentation: str | None,
+    decode_steps: int,
+) -> tuple[int, ...]:
+    if path == "prefill_segmented":
+        total = 0
+        prefixes = []
+        for length in _segments(prompt.tokens, segmentation or ""):
+            total += length
+            prefixes.append(total)
+        return tuple(prefixes)
+    if path == "decode_cached" and prompt.length_class != "long":
+        return tuple(prompt.tokens + step for step in range(decode_steps))
+    return _frames(prompt, path, segmentation, decode_steps)
+
+
+def _reference_transfer(
+    prompt: Prompt,
+    path: str,
+    segmentation: str | None,
+    decode_steps: int,
+) -> int:
+    if path == "prefill_segmented":
+        prefixes = _reference_frames(prompt, path, segmentation, decode_steps)
+        if prompt.length_class == "long":
+            return sum(_long_final_bytes(prefix) for prefix in prefixes)
+        return sum(_full_frame_bytes(prefix, prefix) for prefix in prefixes)
+    if path == "decode_cached" and prompt.length_class != "long":
+        return _trace_transfer(prompt, "decode_recompute", None, decode_steps)
+    return _trace_transfer(prompt, path, segmentation, decode_steps)
+
+
 def main_case(
     prompt: Prompt,
     path: str,
@@ -147,16 +182,32 @@ def main_case(
     decode_steps: int = DECODE_STEPS,
 ) -> Cost:
     frames = _frames(prompt, path, segmentation, decode_steps)
+    reference_frames = _reference_frames(prompt, path, segmentation, decode_steps)
     # Greedy and sampled decoding share the same six warm traces.  Prefill has
     # one variant. Every measured comparison has two aligned endpoints.
     variants = 2 if path.startswith("decode_") else 1
-    measured_path_traces = MEASUREMENT_REPETITIONS * ENDPOINTS * variants
-    path_traces = WARMUP_TRACES + measured_path_traces
+    measured_pairs = MEASUREMENT_REPETITIONS * variants
+    if path == "prefill_segmented":
+        reference_warmups, candidate_warmups = WARMUP_TRACES, WARMUP_TRACES
+    elif path == "decode_cached" and prompt.length_class != "long":
+        reference_warmups, candidate_warmups = 0, WARMUP_TRACES
+    else:
+        reference_warmups, candidate_warmups = WARMUP_TRACES, 0
     return Cost(
-        forwards=path_traces * len(frames),
-        input_tokens=path_traces * sum(frames),
-        transfer_bytes=measured_path_traces * _trace_transfer(
-            prompt, path, segmentation, decode_steps
+        forwards=(
+            reference_warmups * len(reference_frames)
+            + candidate_warmups * len(frames)
+            + measured_pairs * (len(reference_frames) + len(frames))
+        ),
+        input_tokens=(
+            reference_warmups * sum(reference_frames)
+            + candidate_warmups * sum(frames)
+            + measured_pairs * (sum(reference_frames) + sum(frames))
+        ),
+        transfer_bytes=measured_pairs
+        * (
+            _reference_transfer(prompt, path, segmentation, decode_steps)
+            + _trace_transfer(prompt, path, segmentation, decode_steps)
         ),
         shapes="/".join(str(value) for value in frames),
     )
@@ -222,8 +273,8 @@ def _print_main_table() -> tuple[int, int, int]:
 
 def _phase_costs(main_totals: tuple[int, int, int]) -> list[tuple[str, Cost, str]]:
     main = Cost(*main_totals, "voir tableau principal")
-    all_prompts = PROMPTS
     legacy = tuple(Prompt(f"legacy_{i + 1}", "legacy", n) for i, n in enumerate((4, 5, 20, 24, 86, 86)))
+    all_prompts = legacy + PROMPTS
 
     # Inertness: six warm traces followed by two OFF and two ON exact traces.
     inert_forwards = sum(10 for _ in all_prompts)
@@ -235,32 +286,49 @@ def _phase_costs(main_totals: tuple[int, int, int]) -> list[tuple[str, Cost, str
     )
     inert = Cost(inert_forwards, inert_tokens, inert_transfer, "prefill corpus complet")
 
-    # Legacy gate: exact logits only, six shared warm traces + two aligned pairs.
+    # Legacy gate: every treatment rotates through all four configuration
+    # ordinals, with three measured repetitions per configuration. Six pair
+    # warmups are shared by exact path shape (five distinct legacy lengths).
+    unique_legacy = tuple({prompt.tokens: prompt for prompt in legacy}.values())
+    legacy_measured_pair_traces = len(legacy) * 4 * 4 * EXACT_GATE_REPETITIONS
+    legacy_warm_pair_traces = len(unique_legacy) * WARMUP_TRACES
     legacy_cost = Cost(
-        forwards=len(legacy) * 10 * DECODE_STEPS,
-        input_tokens=sum(10 * (prompt.tokens + DECODE_STEPS - 1) for prompt in legacy),
-        transfer_bytes=len(legacy) * 4 * DECODE_STEPS * LOGITS_BYTES,
-        shapes="cached 8 étapes",
+        forwards=(legacy_measured_pair_traces + legacy_warm_pair_traces) * 16,
+        input_tokens=(
+            sum(
+                4 * 4 * EXACT_GATE_REPETITIONS * 2 * (prompt.tokens + DECODE_STEPS - 1)
+                for prompt in legacy
+            )
+            + sum(
+                WARMUP_TRACES * 2 * (prompt.tokens + DECODE_STEPS - 1)
+                for prompt in unique_legacy
+            )
+        ),
+        transfer_bytes=legacy_measured_pair_traces * 16 * LOGITS_BYTES,
+        shapes="ABBA Latin-4, cached 8 étapes",
     )
 
-    # Economical noise floor: 6 warm traces plus 3 repetitions × 3 pairs × 2 sides.
+    # Alternating r6 noise floor: RR/NN/RN × 3 repetitions. Audit_echo reuses
+    # the legacy warmup; short and medium each warm six pair traces.
     noise_prompts = (legacy[0], PROMPTS[0], PROMPTS[2])
+    noise_pair_traces = (9, 15, 15)
     noise_cost = Cost(
-        forwards=len(noise_prompts) * 24 * DECODE_STEPS,
+        forwards=sum(noise_pair_traces) * 16,
         input_tokens=sum(
-            24 * (prompt.tokens + DECODE_STEPS - 1) for prompt in noise_prompts
+            traces * 2 * (prompt.tokens + DECODE_STEPS - 1)
+            for prompt, traces in zip(noise_prompts, noise_pair_traces)
         ),
-        transfer_bytes=len(noise_prompts) * 18 * DECODE_STEPS * LOGITS_BYTES,
-        shapes="cached 8 étapes, logits seulement",
+        transfer_bytes=len(noise_prompts) * 9 * 16 * LOGITS_BYTES,
+        shapes="alternating, cached 8 étapes, logits seulement",
     )
 
     # One reference sampled continuation per seed, then token IDs are frozen.
     continuation_prompts = (PROMPTS[0], PROMPTS[2], PROMPTS[4])
     continuation = Cost(
-        forwards=len(continuation_prompts) * 3 * DECODE_STEPS,
-        input_tokens=sum(3 * (prompt.tokens + DECODE_STEPS - 1) for prompt in continuation_prompts),
-        transfer_bytes=len(continuation_prompts) * 3 * DECODE_STEPS * 8,
-        shapes="3 seeds, génération de référence uniquement",
+        forwards=len(continuation_prompts) * 4 * DECODE_STEPS,
+        input_tokens=sum(4 * (prompt.tokens + DECODE_STEPS - 1) for prompt in continuation_prompts),
+        transfer_bytes=len(continuation_prompts) * 4 * DECODE_STEPS * 8,
+        shapes="greedy + 3 seeds, génération de référence uniquement",
     )
 
     snapshot_prompt = Prompt("audit_echo", "short", 4)
@@ -277,16 +345,16 @@ def _phase_costs(main_totals: tuple[int, int, int]) -> list[tuple[str, Cost, str
     # The already proposed 64-step accumulation probe (short + medium).
     accumulation_prompts = (PROMPTS[0], PROMPTS[2])
     accumulation = Cost(
-        forwards=len(accumulation_prompts) * 10 * 64,
-        input_tokens=sum(10 * (prompt.tokens + 63) for prompt in accumulation_prompts),
+        forwards=len(accumulation_prompts) * 16 * 64,
+        input_tokens=sum(16 * (prompt.tokens + 63) for prompt in accumulation_prompts),
         transfer_bytes=len(accumulation_prompts) * 4 * 64 * LOGITS_BYTES,
-        shapes="cached 64 étapes, logits seulement",
+        shapes="cached vs recompute, 64 étapes, logits seulement",
     )
     preflight = Cost(
-        forwards=207,
+        forwards=333,
         input_tokens=0,
         transfer_bytes=0,
-        shapes="18 chemins court/moyen/long, 1 dry + 2 chronométrés",
+        shapes="18 chemins candidats + 12 compagnons canoniques distincts, 1 dry + 2 chronométrés",
     )
     return [
         ("Préflight chronométré", preflight, "budget automatique après écriture"),

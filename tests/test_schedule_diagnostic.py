@@ -11,6 +11,10 @@ from formic.backbone.groups import HybridGroupView
 from formic.science.identity.executor import Endpoint
 from formic.science.identity import schedule_diagnostic
 from formic.science.identity.artifacts import ArtifactError
+from formic.science.identity.balanced_gate import (
+    run_alternating_noise_floor,
+    run_balanced_logits_gate,
+)
 from formic.science.identity.crossover_diagnostic import (
     AttemptMemoryWriter,
     CPULogitBank,
@@ -137,6 +141,124 @@ def test_measured_alternating_result_has_independent_caches_and_no_tensors():
     assert all(step["left"]["device"] == "cpu" for step in result["steps"])
     assert all(step["right"]["device"] == "cpu" for step in result["steps"])
     json.dumps(result)
+
+
+def test_balanced_gate_rotates_every_treatment_through_every_slot(monkeypatch):
+    monkeypatch.setattr(
+        "formic.science.identity.balanced_gate.run_schedule_pair",
+        _fake_balanced_pair,
+    )
+    reference, runner = _endpoints()
+    payload = run_balanced_logits_gate(
+        reference,
+        runner,
+        prompt_token_ids=(1, 2, 3, 4),
+        forced_token_ids=(5, 6, 7, 8, 9, 10, 11, 12),
+        repetitions=3,
+        warmup_pair_traces=0,
+    )
+
+    assert payload["status"] == "COMPLETE"
+    assert payload["matched_endpoint_exact"] is True
+    assert payload["matched_contrast_last_two_exact"] is True
+    assert len(payload["matched_contrasts"]) == 4 * 3 * 8 * 4
+    assert payload["each_pair_covers_configuration_ordinals"] == [0, 1, 2, 3]
+    coverage = {
+        (item["pair"], item["configuration_ordinal"])
+        for item in payload["raw_pair_results"]
+    }
+    assert coverage == {
+        (pair, slot) for pair in payload["pair_names"] for slot in range(4)
+    }
+    assert not _contains_tensor(payload)
+
+
+def _fake_balanced_pair(
+    calendar,
+    left,
+    right,
+    *,
+    prompt_token_ids,
+    forced_token_ids,
+    capture,
+    cpu_logits_observer=None,
+    **_kwargs,
+):
+    if not capture:
+        return None
+    steps = []
+    for step in range(len(forced_token_ids)):
+        records = {}
+        for within_step, side in enumerate(("left", "right")):
+            endpoint = left if side == "left" else right
+            metadata = {
+                "calendar": calendar,
+                "endpoint": endpoint.name,
+                "side": side,
+                "decode_step": step,
+                "step": step,
+                "pair_local_forward_ordinal": 2 * step + within_step,
+                "within_step_ordinal": within_step,
+            }
+            logits = torch.tensor([0.0, 1.0])
+            if cpu_logits_observer is not None:
+                cpu_logits_observer(dict(metadata), logits)
+            records[side] = {**metadata, "sha256": "same", "top1": 1}
+        steps.append(
+            {
+                "step": step,
+                "point": "logits",
+                "left": records["left"],
+                "right": records["right"],
+                "comparison": {
+                    "max_abs_delta": 0.0,
+                    "kl_next_token": 0.0,
+                    "left_top1": 1,
+                    "right_top1": 1,
+                    "top1_agreement": True,
+                    "exact": True,
+                    "first_coordinate": None,
+                    "left_value": None,
+                    "right_value": None,
+                },
+            }
+        )
+    return {
+        "left_path_fingerprint": f"{left.name}-stable",
+        "right_path_fingerprint": f"{right.name}-stable",
+        "steps": steps,
+        "cache_independence": {
+            "cache_objects_distinct": True,
+            "cache_storage_disjoint": True,
+        },
+        "autograd_disabled_all_forwards": True,
+    }
+
+
+def test_alternating_noise_floor_is_stable_and_logits_only(monkeypatch):
+    monkeypatch.setattr(
+        "formic.science.identity.balanced_gate.run_schedule_pair",
+        _fake_balanced_pair,
+    )
+    reference, runner = _endpoints()
+    payload = run_alternating_noise_floor(
+        reference,
+        runner,
+        prompt_token_ids=(1, 2, 3, 4),
+        forced_token_ids=(5, 6, 7, 8, 9, 10, 11, 12),
+        repetitions=3,
+        warmup_pair_traces=6,
+    )
+
+    assert payload["status"] == "COMPLETE"
+    assert payload["calendar"] == "alternating"
+    assert payload["last_two_pair_traces_exact"] is True
+    assert len(payload["raw_control_floor"]) == 2 * 3 * 8
+    assert {item["pair"] for item in payload["raw_control_floor"]} == {
+        "reference_reference",
+        "runner_runner",
+    }
+    assert not _contains_tensor(payload)
 
 
 def test_sequential_calendar_runs_whole_left_path_before_right_path():
@@ -450,6 +572,33 @@ def _analysis_configurations():
     return configurations
 
 
+def _same_slot_contrasts(metric):
+    contrasts = []
+    names = (
+        ("left_companion_reference", "left"),
+        ("left_companion_runner", "left"),
+        ("right_companion_reference", "right"),
+        ("right_companion_runner", "right"),
+    )
+    for calendar in ("abba", "baab"):
+        for configuration_ordinal in range(8):
+            for repetition in range(3):
+                for step in range(8):
+                    for contrast, side in names:
+                        contrasts.append(
+                            {
+                                "contrast": contrast,
+                                "calendar": calendar,
+                                "configuration_ordinal": configuration_ordinal,
+                                "repetition": repetition,
+                                "step": step,
+                                "side": side,
+                                "metric": dict(metric),
+                            }
+                        )
+    return contrasts
+
+
 def test_analysis_readiness_requires_every_exact_control_and_slot():
     exact = {
         "metric": {
@@ -461,7 +610,7 @@ def test_analysis_readiness_requires_every_exact_control_and_slot():
     }
     ready = build_analysis(
         configurations=_analysis_configurations(),
-        same_slot_contrasts=[exact] * 1536,
+        same_slot_contrasts=_same_slot_contrasts(exact["metric"]),
         inversion_checks=[exact] * 768,
         design_validation=validate_balanced_design(balanced_design()),
     )
@@ -469,9 +618,11 @@ def test_analysis_readiness_requires_every_exact_control_and_slot():
     assert ready["status"] == "COMPLETE"
     assert ready["readiness"]["status"] == "READY"
     assert ready["readiness"]["ready_for_full_spec_02_campaign"] is True
-    assert ready["readiness"]["official_command_recommendation"] is None
-    assert ready["readiness"]["official_launcher_requires_calendar_adaptation"] is True
-    assert ready["readiness"]["currently_runnable"] is False
+    assert ready["readiness"]["official_command_recommendation"].startswith(
+        "python scripts/step2_a40_campaign.py"
+    )
+    assert ready["readiness"]["official_launcher_requires_calendar_adaptation"] is False
+    assert ready["readiness"]["currently_runnable"] is True
     assert ready["readiness"]["command_template_after_code_adaptation"].startswith(
         "python scripts/step2_a40_campaign.py"
     )
@@ -484,16 +635,38 @@ def test_analysis_readiness_requires_every_exact_control_and_slot():
 
     configurations = _analysis_configurations()
     configurations[0]["all_last_two_slots_exact"] = False
-    blocked = build_analysis(
+    raw_ordinal_drift = build_analysis(
         configurations=configurations,
-        same_slot_contrasts=[exact] * 1536,
+        same_slot_contrasts=_same_slot_contrasts(exact["metric"]),
         inversion_checks=[exact] * 768,
         design_validation=validate_balanced_design(balanced_design()),
     )
-    assert blocked["status"] == "COMPLETE"
-    assert blocked["readiness"]["status"] == "BLOCKED"
-    assert blocked["readiness"]["official_command_recommendation"] is None
-    assert blocked["readiness"]["command_template_after_code_adaptation"] is None
+    assert raw_ordinal_drift["status"] == "COMPLETE"
+    assert raw_ordinal_drift["readiness"]["status"] == "READY"
+    assert raw_ordinal_drift["checks"]["all_last_two_slot_checks_exact"] is False
+    assert raw_ordinal_drift["checks"]["matched_contrasts_last_two_exact"] is True
+    assert raw_ordinal_drift["nonblocking_ordinal_diagnostics"][
+        "raw_last_two_slots_exact"
+    ] is False
+
+    token_drift_contrasts = _same_slot_contrasts(exact["metric"])
+    for item in token_drift_contrasts:
+        token = 100 + item["repetition"]
+        item["metric"].update(
+            {
+                "reference_top1": token,
+                "candidate_top1": token,
+                "top1_agreement": True,
+            }
+        )
+    token_drift = build_analysis(
+        configurations=_analysis_configurations(),
+        same_slot_contrasts=token_drift_contrasts,
+        inversion_checks=[exact] * 768,
+        design_validation=validate_balanced_design(balanced_design()),
+    )
+    assert token_drift["readiness"]["status"] == "READY"
+    assert token_drift["checks"]["matched_contrasts_last_two_exact"] is True
 
     nonexact = {
         "calendar": "abba",
@@ -510,9 +683,11 @@ def test_analysis_readiness_requires_every_exact_control_and_slot():
             "candidate_value": 1.25,
         },
     }
+    nonexact_contrasts = _same_slot_contrasts(exact["metric"])
+    nonexact_contrasts[0] = nonexact
     numerical_block = build_analysis(
         configurations=_analysis_configurations(),
-        same_slot_contrasts=[nonexact] + [exact] * 1535,
+        same_slot_contrasts=nonexact_contrasts,
         inversion_checks=[exact] * 768,
         design_validation=validate_balanced_design(balanced_design()),
     )

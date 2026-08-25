@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import gc
 import json
+import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +22,11 @@ import torch
 
 from formic.backbone.loader import BackboneHandle, load_backbone
 from formic.config.schema import RunConfig
-from formic.science.backbone_hash import BackboneHash, canonical_backbone_hash
+from formic.science.backbone_hash import (
+    BackboneHash,
+    canonical_backbone_hash,
+    load_reusable_backbone_hash,
+)
 from formic.science.determinism import environment_report, git_commit, git_dirty
 from formic.science.identity.artifacts import (
     CampaignIdentity,
@@ -28,7 +34,11 @@ from formic.science.identity.artifacts import (
     atomic_write_json,
     sha256_bytes,
 )
-from formic.science.identity.budget import report_estimate
+from formic.science.identity.budget import load_preflight_estimate, report_estimate
+from formic.science.identity.balanced_gate import (
+    run_alternating_noise_floor,
+    run_balanced_logits_gate,
+)
 from formic.science.identity.calibration import (
     build_candidate_tolerances,
     candidate_verdict,
@@ -40,8 +50,11 @@ from formic.science.identity.executor import (
     AlignedCasePayload,
     Endpoint,
     execute_path,
+    execute_reference_for_candidate,
     expected_shapes,
+    reference_shapes_for_candidate,
     run_aligned_pair,
+    run_cross_path_pair,
     run_greedy_pair,
 )
 from formic.science.identity.metrics import compare_logits
@@ -98,6 +111,10 @@ def run_gpu_campaign(
     if not commit:
         raise CampaignError("unable to resolve the campaign git commit")
     root = Path(run_root)
+    if root.exists() and any(root.iterdir()) and not resume:
+        raise CampaignError("run directory already contains artifacts; pass --resume")
+    if resume and not (root / "manifest.json").is_file():
+        raise CampaignError("--resume requires an existing campaign manifest")
     corpus = load_frozen_corpus(_repo_path(config.identity.prompt_set_path))
     plan = build_campaign_plan(config, corpus)
     started_at = _now()
@@ -110,8 +127,15 @@ def run_gpu_campaign(
         memory.record("after_load", handle.model)
         corpus.validate_tokenizer(handle.tokenizer)
         backbone = canonical_backbone_hash(handle.inventory)
+        expected_backbone = load_reusable_backbone_hash(
+            _repo_path(config.identity.backbone_hash_path)
+        )
+        if backbone != expected_backbone:
+            raise CampaignError(
+                "loaded backbone differs from the committed audited backbone hash"
+            )
         identity = CampaignIdentity(
-            protocol="SPEC-02-h8-option-b",
+            protocol="SPEC-02-h8-option-b-balanced-v2",
             config_sha256=config.config_hash(),
             corpus_sha256=corpus.corpus_sha256,
             git_commit=commit,
@@ -140,9 +164,9 @@ def run_gpu_campaign(
         release_cuda_working_set()
         _phase_legacy(writer, session, corpus)
         release_cuda_working_set()
-        _phase_noise_floor(writer, session, corpus)
+        noise_floor = _phase_noise_floor(writer, session, corpus)
         release_cuda_working_set()
-        _phase_snapshot_restore(writer, session, corpus)
+        snapshot_evidence = _phase_snapshot_restore(writer, session, corpus)
         release_cuda_working_set()
         continuations = _phase_continuations(writer, session, corpus)
         release_cuda_working_set()
@@ -159,9 +183,22 @@ def run_gpu_campaign(
         raw_path = root / "calibration" / "raw_measurements.json"
         atomic_write_json(raw_path, {"schema_version": 1, "observations": calibration})
         raw_digest = sha256_bytes(raw_path.read_bytes())
-        candidate = build_candidate_tolerances(calibration, raw_measurements_sha256=raw_digest)
+        candidate = build_candidate_tolerances(
+            calibration,
+            raw_measurements_sha256=raw_digest,
+            reference_floor_observations=_flatten_reference_floor(noise_floor),
+        )
         candidate_path = root / "tolerances.candidate.json"
         atomic_write_json(candidate_path, candidate)
+        snapshot_adjudication = _adjudicate_snapshot_candidate(
+            snapshot_evidence, candidate
+        )
+        atomic_write_json(
+            root / "snapshot_restore" / "adjudication.candidate.json",
+            snapshot_adjudication,
+        )
+        if snapshot_adjudication["verdict"] != "CANDIDATE_PASS":
+            raise CampaignError("snapshot/restore candidate adjudication failed")
         verdict = candidate_verdict(calibration)
         verdict.update(
             {
@@ -184,7 +221,7 @@ def run_gpu_campaign(
                 "status": "CALIBRATION_COMPLETE",
                 "message": "CALIBRATION COMPLETE — PROMOTION REQUIRED",
                 "finished_at": _now(),
-                "stop_pod_before_analysis": True,
+                "pod_action_required": None,
             },
         )
         return CampaignResult(
@@ -220,6 +257,10 @@ def _phase_preflight(
     memory: IncrementalMemoryWriter | None = None,
 ) -> None:
     if "preflight" in writer.completed_phases():
+        estimate = report_estimate(
+            load_preflight_estimate(root / "preflight" / "estimate.json")
+        )
+        _report_preflight_estimate(root, estimate.to_dict())
         return
     run = run_preflight(
         handle,
@@ -233,8 +274,7 @@ def _phase_preflight(
         ),
     )
     estimate = report_estimate(run.estimate)
-    atomic_write_json(root / "preflight" / "estimate_report.json", estimate.to_dict())
-    _print_estimate(estimate.to_dict())
+    _report_preflight_estimate(root, estimate.to_dict())
     writer.write_phase(
         "preflight",
         {
@@ -243,6 +283,35 @@ def _phase_preflight(
             "estimate": estimate.to_dict(),
         },
     )
+
+
+def _report_preflight_estimate(root: Path, expected: dict[str, Any]) -> None:
+    """Invoke the non-blocking reporter and verify its informational output."""
+    canonical_preflight = _repo_path("artifacts/step2/preflight")
+    atomic_write_json(
+        canonical_preflight / "estimate.json",
+        json.loads((root / "preflight" / "estimate.json").read_text(encoding="utf-8")),
+    )
+    reporter = subprocess.run(
+        (
+            sys.executable,
+            str(_repo_path("scripts/step2_budget_gate.py")),
+            "--preflight",
+            str(root / "preflight" / "estimate.json"),
+            "--output",
+            str(canonical_preflight / "estimate_report.json"),
+        ),
+        cwd=_repo_path("."),
+        check=True,
+    )
+    if reporter.returncode != 0:  # pragma: no cover - check=True is defensive
+        raise CampaignError("post-preflight estimate reporter failed")
+    reported = json.loads(
+        (canonical_preflight / "estimate_report.json").read_text(encoding="utf-8")
+    )
+    if reported != expected:
+        raise CampaignError("post-preflight estimate reporter changed the estimate")
+    atomic_write_json(root / "preflight" / "estimate_report.json", reported)
 
 
 def _phase_trace_inertness(
@@ -282,7 +351,7 @@ def _phase_trace_inertness(
         }
         writer.write_case(case_id, payload)
         records.append(payload)
-    writer.write_phase(phase, {"schema_version": 1, "forwards": 60, "cases": records})
+    writer.write_phase(phase, {"schema_version": 1, "forwards": 120, "cases": records})
 
 
 def _phase_legacy(
@@ -295,69 +364,65 @@ def _phase_legacy(
         return
     records: list[dict[str, Any]] = []
     for prompt in (item for item in corpus.prompts if item.set_name == "legacy"):
-        path = CampaignPath(prompt, ExecutionMode.DECODE_CACHED)
         case_id = f"legacy__{prompt.id}"
-        payload = _measure_or_resume(
+        payload = _measure_balanced_or_resume(
             writer,
             case_id,
             phase,
             session,
-            path,
+            prompt,
             forced_token_ids=timing_continuation(prompt, session.config.identity.decode_tokens),
             repetitions=session.config.identity.exact_gate_repetitions,
-            sampling=SamplingMode.GREEDY,
-            continuation_seed=None,
             exact_required=True,
         )
         records.append(payload)
-    writer.write_phase(phase, {"schema_version": 1, "forwards": 480, "cases": records})
+    writer.write_phase(phase, {"schema_version": 1, "forwards": 3_552, "cases": records})
 
 
 def _phase_noise_floor(
     writer: IncrementalCampaignWriter,
     session: "_MeasurementSession",
     corpus: FrozenPromptCorpus,
-) -> None:
+) -> list[dict[str, Any]]:
     phase = "noise_floor"
     if phase in writer.completed_phases():
-        return
+        phase_payload = json.loads(
+            (writer.phases_dir / f"{phase}.json").read_text(encoding="utf-8")
+        )
+        return list(phase_payload["cases"])
     by_id = {item.id: item for item in corpus.prompts}
     records: list[dict[str, Any]] = []
     for prompt_id in ("audit_echo", "short_error_assertion", "medium_cache_regression"):
         prompt = by_id[prompt_id]
-        path = CampaignPath(prompt, ExecutionMode.DECODE_CACHED)
-        for pair_name, endpoints in (
-            ("reference_reference", (session.reference, session.reference)),
-            ("runner_runner", (session.runner, session.runner)),
-            ("runner_reference", (session.runner, session.reference)),
-        ):
-            case_id = f"noise__{prompt.id}__{pair_name}"
-            payload = _measure_or_resume(
+        case_id = f"noise__{prompt.id}__alternating"
+        records.append(
+            _measure_noise_floor_or_resume(
                 writer,
                 case_id,
                 phase,
                 session,
-                path,
-                forced_token_ids=timing_continuation(prompt, session.config.identity.decode_tokens),
+                prompt,
+                forced_token_ids=timing_continuation(
+                    prompt, session.config.identity.decode_tokens
+                ),
                 repetitions=session.config.identity.measurement_repetitions,
-                sampling=SamplingMode.GREEDY,
-                continuation_seed=None,
-                exact_required=False,
-                endpoints=endpoints,
-                logits_only=True,
             )
-            records.append(payload)
-    writer.write_phase(phase, {"schema_version": 1, "forwards": 576, "cases": records})
+        )
+    writer.write_phase(phase, {"schema_version": 1, "forwards": 624, "cases": records})
+    return records
 
 
 def _phase_snapshot_restore(
     writer: IncrementalCampaignWriter,
     session: "_MeasurementSession",
     corpus: FrozenPromptCorpus,
-) -> None:
+) -> dict[str, Any]:
     phase = "snapshot_restore"
     if phase in writer.completed_phases():
-        return
+        phase_payload = json.loads(
+            (writer.phases_dir / f"{phase}.json").read_text(encoding="utf-8")
+        )
+        return dict(phase_payload["cases"][0])
     prompt = next(item for item in corpus.prompts if item.id == session.config.identity.snapshot_validation_prompt_id)
     case_id = "snapshot_restore__audit_echo"
     if case_id in writer.completed_cases():
@@ -366,16 +431,17 @@ def _phase_snapshot_restore(
         payload = session.snapshot_restore(prompt)
         writer.write_case(case_id, payload)
     writer.write_phase(phase, {"schema_version": 1, "forwards": 48, "cases": [payload]})
+    return payload
 
 
 def _phase_continuations(
     writer: IncrementalCampaignWriter,
     session: "_MeasurementSession",
     corpus: FrozenPromptCorpus,
-) -> dict[tuple[str, int], tuple[int, ...]]:
+) -> dict[tuple[str, int | None], tuple[int, ...]]:
     phase = "reference_continuations"
     by_id = {item.id: item for item in corpus.prompts}
-    result: dict[tuple[str, int], tuple[int, ...]] = {}
+    result: dict[tuple[str, int | None], tuple[int, ...]] = {}
     if phase in writer.completed_phases():
         phase_payload = json.loads((writer.phases_dir / f"{phase}.json").read_text(encoding="utf-8"))
         for item in phase_payload["cases"]:
@@ -384,19 +450,32 @@ def _phase_continuations(
     records: list[dict[str, Any]] = []
     for prompt_id in session.config.identity.decode_prompt_ids:
         prompt = by_id[prompt_id]
+        greedy = session.greedy_continuation(prompt)
+        greedy_payload = {
+            "schema_version": 1,
+            "phase": phase,
+            "prompt_id": prompt.id,
+            "sampling": SamplingMode.GREEDY.value,
+            "seed": None,
+            "token_ids": list(greedy),
+        }
+        writer.write_case(f"continuation__{prompt.id}__greedy", greedy_payload)
+        records.append(greedy_payload)
+        result[(prompt.id, None)] = greedy
         for seed in session.config.identity.continuation_seeds:
             forced = session.sampled_continuation(prompt, seed)
             payload = {
                 "schema_version": 1,
                 "phase": phase,
                 "prompt_id": prompt.id,
+                "sampling": SamplingMode.SEEDED_SAMPLING.value,
                 "seed": seed,
                 "token_ids": list(forced),
             }
             writer.write_case(f"continuation__{prompt.id}__s{seed}", payload)
             records.append(payload)
             result[(prompt.id, seed)] = forced
-    writer.write_phase(phase, {"schema_version": 1, "forwards": 72, "cases": records})
+    writer.write_phase(phase, {"schema_version": 1, "forwards": 96, "cases": records})
     return result
 
 
@@ -404,7 +483,7 @@ def _phase_calibration(
     writer: IncrementalCampaignWriter,
     session: "_MeasurementSession",
     plan: CampaignPlan,
-    continuations: dict[tuple[str, int], tuple[int, ...]],
+    continuations: dict[tuple[str, int | None], tuple[int, ...]],
     sampled_seed: int,
 ) -> list[dict[str, Any]]:
     observations: list[dict[str, Any]] = []
@@ -416,7 +495,18 @@ def _phase_calibration(
         records: list[dict[str, Any]] = []
         for path in (item for item in plan.calibration_paths if item.prompt.length_class == length_class):
             if path.mode is ExecutionMode.DECODE_CACHED:
-                greedy = _measure_greedy_or_resume(writer, session, path)
+                greedy = _measure_or_resume(
+                    writer,
+                    f"calibration__{path.key}__greedy",
+                    length_class,
+                    session,
+                    path,
+                    forced_token_ids=continuations[(path.prompt.id, None)],
+                    repetitions=session.config.identity.measurement_repetitions,
+                    sampling=SamplingMode.GREEDY,
+                    continuation_seed=None,
+                    exact_required=False,
+                )
                 sampled = _measure_or_resume(
                     writer,
                     f"calibration__{path.key}__sampled_s{sampled_seed}",
@@ -432,7 +522,11 @@ def _phase_calibration(
                 records.extend((greedy, sampled))
             elif path.mode is ExecutionMode.DECODE_RECOMPUTE:
                 for sampling, forced, seed in (
-                    (SamplingMode.GREEDY, timing_continuation(path.prompt, session.config.identity.decode_tokens), None),
+                    (
+                        SamplingMode.GREEDY,
+                        continuations[(path.prompt.id, None)],
+                        None,
+                    ),
                     (SamplingMode.SEEDED_SAMPLING, continuations[(path.prompt.id, sampled_seed)], sampled_seed),
                 ):
                     records.append(
@@ -480,7 +574,7 @@ def _phase_probe64(
     writer: IncrementalCampaignWriter,
     session: "_MeasurementSession",
     corpus: FrozenPromptCorpus,
-    continuations: dict[tuple[str, int], tuple[int, ...]],
+    continuations: dict[tuple[str, int | None], tuple[int, ...]],
     sampled_seed: int,
 ) -> None:
     phase = "accumulation_probe_64"
@@ -510,7 +604,133 @@ def _phase_probe64(
                 decode_steps=session.config.identity.accumulation_probe_tokens,
             )
         )
-    writer.write_phase(phase, {"schema_version": 1, "forwards": 1280, "cases": records})
+    writer.write_phase(phase, {"schema_version": 1, "forwards": 2_048, "cases": records})
+
+
+def _measure_balanced_or_resume(
+    writer: IncrementalCampaignWriter,
+    case_id: str,
+    phase: str,
+    session: "_MeasurementSession",
+    prompt: FrozenPrompt,
+    *,
+    forced_token_ids: tuple[int, ...],
+    repetitions: int,
+    exact_required: bool,
+) -> dict[str, Any]:
+    if case_id in writer.completed_cases():
+        return _read_case(writer, case_id)
+    latest: dict[str, Any] = {
+        "schema_version": 1,
+        "status": "STARTED",
+        "phase": phase,
+        "case_id": case_id,
+        "prompt_id": prompt.id,
+    }
+
+    def observe(payload: dict[str, Any]) -> None:
+        nonlocal latest
+        latest = {
+            **payload,
+            "phase": phase,
+            "case_id": case_id,
+            "prompt_id": prompt.id,
+        }
+        writer.write_diagnostic(case_id, latest)
+
+    try:
+        payload = session.measure_balanced_logits(
+            prompt,
+            forced_token_ids=forced_token_ids,
+            repetitions=repetitions,
+            observer=observe,
+        )
+        payload.update(
+            {
+                "phase": phase,
+                "case_id": case_id,
+                "prompt_id": prompt.id,
+                "length_class": prompt.length_class,
+                "exact_prompt_length": len(prompt.token_ids),
+            }
+        )
+        if exact_required and not payload["matched_endpoint_exact"]:
+            raise CampaignError(f"balanced exact gate diverged: {case_id}")
+    except Exception as exc:
+        writer.write_diagnostic(
+            case_id,
+            {
+                **latest,
+                "status": "FAILED",
+                "failure": {"exception": type(exc).__name__, "message": str(exc)},
+            },
+        )
+        raise
+    writer.write_case(case_id, payload)
+    return payload
+
+
+def _measure_noise_floor_or_resume(
+    writer: IncrementalCampaignWriter,
+    case_id: str,
+    phase: str,
+    session: "_MeasurementSession",
+    prompt: FrozenPrompt,
+    *,
+    forced_token_ids: tuple[int, ...],
+    repetitions: int,
+) -> dict[str, Any]:
+    if case_id in writer.completed_cases():
+        return _read_case(writer, case_id)
+    latest: dict[str, Any] = {
+        "schema_version": 1,
+        "status": "STARTED",
+        "phase": phase,
+        "case_id": case_id,
+        "prompt_id": prompt.id,
+    }
+
+    def observe(payload: dict[str, Any]) -> None:
+        nonlocal latest
+        latest = {
+            **payload,
+            "phase": phase,
+            "case_id": case_id,
+            "prompt_id": prompt.id,
+        }
+        writer.write_diagnostic(
+            case_id,
+            latest,
+        )
+
+    try:
+        payload = session.measure_noise_floor_logits(
+            prompt,
+            forced_token_ids=forced_token_ids,
+            repetitions=repetitions,
+            observer=observe,
+        )
+        payload.update(
+            {
+                "phase": phase,
+                "case_id": case_id,
+                "prompt_id": prompt.id,
+                "length_class": prompt.length_class,
+                "exact_prompt_length": len(prompt.token_ids),
+            }
+        )
+    except Exception as exc:
+        writer.write_diagnostic(
+            case_id,
+            {
+                **latest,
+                "status": "FAILED",
+                "failure": {"exception": type(exc).__name__, "message": str(exc)},
+            },
+        )
+        raise
+    writer.write_case(case_id, payload)
+    return payload
 
 
 def _measure_or_resume(
@@ -621,20 +841,42 @@ class _MeasurementSession:
         self.reference = Endpoint("reference", handle.model, handle.view, False)
         self.runner = Endpoint("runner", handle.model, handle.view, True)
         self.warmups = SharedShapeWarmups(config.numerics.warmup_traces_per_shape)
+        self.balanced_warmups = SharedShapeWarmups(
+            config.numerics.warmup_traces_per_shape
+        )
         self.plan: CampaignPlan | None = None
         self.memory = memory
 
     def warm(self, path: CampaignPath, forced: tuple[int, ...], decode_steps: int) -> int:
-        shapes = expected_shapes(
+        candidate_shapes = expected_shapes(
             prompt_length=len(path.prompt.token_ids),
             mode=path.mode,
             segmentation=path.segmentation,
             decode_steps=decode_steps,
         )
-        count = self.warmups.required_path_traces(shapes)
-        for _ in range(count):
-            execute_path(
+        reference_shapes = reference_shapes_for_candidate(
+            prompt_length=len(path.prompt.token_ids),
+            candidate_mode=path.mode,
+            segmentation=path.segmentation,
+            decode_steps=decode_steps,
+            length_class=path.prompt.length_class,
+        )
+        reference_count = self.warmups.required_path_traces(reference_shapes)
+        for _ in range(reference_count):
+            execute_reference_for_candidate(
                 self.reference,
+                prompt_token_ids=path.prompt.token_ids,
+                candidate_mode=path.mode,
+                length_class=path.prompt.length_class,
+                segmentation=path.segmentation,
+                forced_token_ids=forced,
+                capture=False,
+            )
+            self.warmups.record_path_trace(reference_shapes)
+        candidate_count = self.warmups.required_path_traces(candidate_shapes)
+        for _ in range(candidate_count):
+            execute_path(
+                self.runner,
                 prompt_token_ids=path.prompt.token_ids,
                 mode=path.mode,
                 length_class=path.prompt.length_class,
@@ -642,8 +884,64 @@ class _MeasurementSession:
                 forced_token_ids=forced,
                 capture=False,
             )
-            self.warmups.record_path_trace(shapes)
-        return count
+            self.warmups.record_path_trace(candidate_shapes)
+        return reference_count + candidate_count
+
+    def measure_balanced_logits(
+        self,
+        prompt: FrozenPrompt,
+        *,
+        forced_token_ids: tuple[int, ...],
+        repetitions: int,
+        observer: Callable[[dict[str, Any]], None] | None,
+    ) -> dict[str, Any]:
+        shapes = expected_shapes(
+            prompt_length=len(prompt.token_ids),
+            mode=ExecutionMode.DECODE_CACHED,
+            segmentation=None,
+            decode_steps=len(forced_token_ids),
+        )
+        warmups = self.balanced_warmups.required_path_traces(shapes)
+        payload = run_balanced_logits_gate(
+            self.reference,
+            self.runner,
+            prompt_token_ids=prompt.token_ids,
+            forced_token_ids=forced_token_ids,
+            repetitions=repetitions,
+            warmup_pair_traces=warmups,
+            observer=observer,
+        )
+        for _ in range(warmups):
+            self.balanced_warmups.record_path_trace(shapes)
+        return payload
+
+    def measure_noise_floor_logits(
+        self,
+        prompt: FrozenPrompt,
+        *,
+        forced_token_ids: tuple[int, ...],
+        repetitions: int,
+        observer: Callable[[dict[str, Any]], None] | None,
+    ) -> dict[str, Any]:
+        shapes = expected_shapes(
+            prompt_length=len(prompt.token_ids),
+            mode=ExecutionMode.DECODE_CACHED,
+            segmentation=None,
+            decode_steps=len(forced_token_ids),
+        )
+        warmups = self.balanced_warmups.required_path_traces(shapes)
+        payload = run_alternating_noise_floor(
+            self.reference,
+            self.runner,
+            prompt_token_ids=prompt.token_ids,
+            forced_token_ids=forced_token_ids,
+            repetitions=repetitions,
+            warmup_pair_traces=warmups,
+            observer=observer,
+        )
+        for _ in range(warmups):
+            self.balanced_warmups.record_path_trace(shapes)
+        return payload
 
     def measure_forced(
         self,
@@ -668,16 +966,28 @@ class _MeasurementSession:
         results: list[dict[str, Any]] = []
         fingerprints: list[tuple[str, str]] = []
         for repetition in range(repetitions):
-            pair = run_aligned_pair(
-                reference,
-                candidate,
-                prompt_token_ids=path.prompt.token_ids,
-                mode=path.mode,
-                length_class=path.prompt.length_class,
-                segmentation=path.segmentation,
-                forced_token_ids=forced_token_ids,
-                capture=True,
-            )
+            if endpoints is None:
+                pair = run_cross_path_pair(
+                    reference,
+                    candidate,
+                    prompt_token_ids=path.prompt.token_ids,
+                    candidate_mode=path.mode,
+                    length_class=path.prompt.length_class,
+                    segmentation=path.segmentation,
+                    forced_token_ids=forced_token_ids,
+                    capture=True,
+                )
+            else:
+                pair = run_aligned_pair(
+                    reference,
+                    candidate,
+                    prompt_token_ids=path.prompt.token_ids,
+                    mode=path.mode,
+                    length_class=path.prompt.length_class,
+                    segmentation=path.segmentation,
+                    forced_token_ids=forced_token_ids,
+                    capture=True,
+                )
             fingerprints.append((pair.reference_fingerprint, pair.candidate_fingerprint))
             results.append(
                 _pair_to_observation(
@@ -816,23 +1126,47 @@ class _MeasurementSession:
         return compare_logits(off, collector.last_trace.logits)
 
     @torch.no_grad()
+    def greedy_continuation(self, prompt: FrozenPrompt) -> tuple[int, ...]:
+        return self._reference_continuation(prompt, seed=0, mode="greedy")
+
+    @torch.no_grad()
     def sampled_continuation(self, prompt: FrozenPrompt, seed: int) -> tuple[int, ...]:
+        return self._reference_continuation(
+            prompt, seed=seed, mode="seeded_sampling"
+        )
+
+    def _reference_continuation(
+        self, prompt: FrozenPrompt, *, seed: int, mode: str
+    ) -> tuple[int, ...]:
+        from transformers.cache_utils import DynamicCache
+
         device = self.handle.device
+        cache = DynamicCache(config=self.handle.model.config)
+        calls = 0
 
         def next_logits(context: tuple[int, ...]) -> torch.Tensor:
-            inputs = torch.tensor([context], dtype=torch.long, device=device)
-            return self.handle.model(input_ids=inputs, use_cache=False).logits[0, -1]
+            nonlocal calls
+            token_ids = context if calls == 0 else context[-1:]
+            inputs = torch.tensor([token_ids], dtype=torch.long, device=device)
+            calls += 1
+            return self.handle.model(
+                input_ids=inputs,
+                past_key_values=cache,
+                use_cache=True,
+            ).logits[0, -1]
 
         result = generate_forced_continuation(
             prompt_token_ids=prompt.token_ids,
             steps=self.config.identity.decode_tokens,
             seed=seed,
-            mode="seeded_sampling",
+            mode=mode,
             reference_next_logits=next_logits,
             temperature=self.config.sampling.payload.temperature,
             top_p=self.config.sampling.payload.top_p,
             top_k=self.config.sampling.payload.top_k,
         )
+        if calls != self.config.identity.decode_tokens:
+            raise CampaignError("reference continuation forward count changed")
         return result.token_ids
 
     @torch.no_grad()
@@ -880,13 +1214,28 @@ class _MeasurementSession:
             b_logits = _continue_branch(controller, branch_b, tail_tokens, device)
             comparisons = [compare_logits(uninterrupted[4 + index], value) for index, value in enumerate(a_logits)]
             comparisons += [compare_logits(uninterrupted[4 + index], value) for index, value in enumerate(b_logits)]
+            serialised = [item.to_dict() for item in comparisons]
+            comparison_fingerprint = sha256_bytes(
+                json.dumps(
+                    serialised, sort_keys=True, separators=(",", ":")
+                ).encode()
+            )
             observations.append(
                 {
                     "repetition": repetition,
                     "all_exact": all(item.tensor.exact and item.top1_agreement for item in comparisons),
                     "max_abs_delta": max(item.tensor.max_abs_delta for item in comparisons),
-                    "comparisons": [item.to_dict() for item in comparisons],
+                    "comparison_fingerprint": comparison_fingerprint,
+                    "comparisons": serialised,
                 }
+            )
+        last_two_exact = (
+            observations[-2]["comparison_fingerprint"]
+            == observations[-1]["comparison_fingerprint"]
+        )
+        if not last_two_exact:
+            raise InvalidMeasurement(
+                "snapshot/restore last two comparison traces are unstable"
             )
         return {
             "schema_version": 1,
@@ -894,6 +1243,10 @@ class _MeasurementSession:
             "case_id": "snapshot_restore__audit_echo",
             "prompt_id": prompt.id,
             "observations": observations,
+            "stability": {
+                "assertion": "last_two_snapshot_contrasts_exact",
+                "last_two_exact": last_two_exact,
+            },
         }
 
 
@@ -967,8 +1320,22 @@ def _pair_to_observation(
     if not isinstance(payload, AlignedCasePayload):
         raise CampaignError("measured pair omitted its trace payload")
     measurements: list[dict[str, Any]] = []
+    not_applicable: list[dict[str, Any]] = []
     for comparison in payload.comparisons:
         measurements.extend(_serialise_comparison(comparison, logits_only=logits_only))
+        if not logits_only:
+            not_applicable.extend(
+                {
+                    "step": comparison.measurements[0].step,
+                    "location": {
+                        "point": item.point.value,
+                        "boundary": item.boundary,
+                        "layer": item.layer,
+                        "component": item.component,
+                    },
+                }
+                for item in comparison.not_applicable
+            )
     return {
         "case_id": case_id,
         "prompt_id": prompt.id,
@@ -979,10 +1346,14 @@ def _pair_to_observation(
         "sampling": sampling.value,
         "continuation_seed": continuation_seed,
         "repetition": repetition,
+        "comparison_protocol": "canonical_reference_vs_formic_candidate",
+        "reference_input_shapes": [frame.shape.key for frame in payload.reference.frames],
+        "candidate_input_shapes": [frame.shape.key for frame in payload.candidate.frames],
         "reference_fingerprint": pair.reference_fingerprint,
         "candidate_fingerprint": pair.candidate_fingerprint,
         "captured_state_tensors": pair.captured_state_tensors,
         "measurements": measurements,
+        "not_applicable": not_applicable,
     }
 
 
@@ -1030,6 +1401,77 @@ def _flatten_observations(cases: Iterable[dict[str, Any]]) -> list[dict[str, Any
     for case in cases:
         result.extend(case.get("repetitions", ()))
     return result
+
+
+def _flatten_reference_floor(cases: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for case in cases:
+        for observation in case.get("raw_control_floor", ()):
+            if observation.get("pair") != "reference_reference":
+                continue
+            result.append(
+                {
+                    "prompt_id": case["prompt_id"],
+                    "length_class": case.get("length_class", "legacy"),
+                    "exact_prompt_length": case.get("exact_prompt_length"),
+                    "mode": ExecutionMode.DECODE_CACHED.value,
+                    "point": "logits",
+                    "repetition": observation["repetition"],
+                    "step": observation["step"],
+                    "max_abs_delta": float(
+                        observation["metric"]["max_abs_delta"]
+                    ),
+                    "metric": observation["metric"],
+                }
+            )
+    return result
+
+
+def _adjudicate_snapshot_candidate(
+    snapshot_payload: dict[str, Any], candidate: dict[str, Any]
+) -> dict[str, Any]:
+    record = next(
+        (
+            item
+            for item in candidate["records"]
+            if item["mode"] == ExecutionMode.DECODE_CACHED.value
+            and item["point"] == "logits"
+            and item["length_class"] == "short"
+        ),
+        None,
+    )
+    if record is None:
+        raise CampaignError("candidate tolerances omit short cached logits")
+    threshold = float(record["max_abs_delta"])
+    failures: list[dict[str, Any]] = []
+    for observation in snapshot_payload["observations"]:
+        for index, comparison in enumerate(observation["comparisons"]):
+            if comparison["tensor"]["max_abs_delta"] > threshold:
+                failures.append(
+                    {
+                        "repetition": observation["repetition"],
+                        "comparison": index,
+                        "metric": comparison,
+                    }
+                )
+            if comparison["top1_agreement"] is False:
+                failures.append(
+                    {
+                        "repetition": observation["repetition"],
+                        "comparison": index,
+                        "metric": comparison,
+                        "reason": "top1_disagreement",
+                    }
+                )
+    return {
+        "schema_version": 1,
+        "status": "candidate_only",
+        "verdict": "CANDIDATE_PASS" if not failures else "FAIL",
+        "tolerance_key": ["decode_cached", "logits", "short"],
+        "max_abs_delta": threshold,
+        "snapshot_stability": snapshot_payload["stability"],
+        "first_failure": failures[0] if failures else None,
+    }
 
 
 def _read_case(writer: IncrementalCampaignWriter, case_id: str) -> dict[str, Any]:
@@ -1108,19 +1550,11 @@ def _write_failure(root: Path, exc: Exception) -> None:
                 "message": str(exc),
                 "exception": type(exc).__name__,
                 "finished_at": _now(),
-                "stop_pod_before_analysis": True,
+                "pod_action_required": None,
             },
         )
     except Exception:
         pass
-
-
-def _print_estimate(report: dict[str, Any]) -> None:
-    print("PREFLIGHT ESTIMATE:")
-    print(f"  load={report['model_load_seconds']:.1f}s preflight={report['preflight_elapsed_seconds']:.1f}s")
-    for phase in report["phases"]:
-        print(f"  {phase['name']}: {phase['estimated_seconds']:.1f}s ({phase['forwards']} forwards)")
-    print(f"  TOTAL ESTIMATED: {report['total_estimated_seconds']:.1f}s")
 
 
 def _repo_path(value: str) -> Path:

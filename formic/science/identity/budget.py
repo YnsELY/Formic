@@ -8,18 +8,18 @@ from pathlib import Path
 from typing import Any
 
 
-PROTOCOL_ID = "SPEC-02-h8-option-b"
-PREFLIGHT_FORWARDS = 207
+PROTOCOL_ID = "SPEC-02-h8-option-b-balanced-v2"
+PREFLIGHT_FORWARDS = 333
 EXPECTED_PHASE_FORWARDS = {
-    "trace_inertness": 60,
-    "legacy_continuity": 480,
-    "noise_floor": 576,
+    "trace_inertness": 120,
+    "legacy_continuity": 3_552,
+    "noise_floor": 624,
     "snapshot_restore": 48,
-    "reference_continuations": 72,
-    "short": 552,
-    "medium": 552,
-    "long": 312,
-    "accumulation_probe_64": 1_280,
+    "reference_continuations": 96,
+    "short": 672,
+    "medium": 672,
+    "long": 384,
+    "accumulation_probe_64": 2_048,
 }
 
 

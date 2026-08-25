@@ -65,8 +65,8 @@ class CampaignPlan:
             raise ValueError("SPEC-02 campaign forward budget changed")
         if len(self.preflight_paths) != 18:
             raise ValueError("preflight must contain 18 timed paths")
-        if self.total_forwards != 4_139:
-            raise ValueError(f"campaign forwards {self.total_forwards} != 4139")
+        if self.total_forwards != 8_549:
+            raise ValueError(f"campaign forwards {self.total_forwards} != 8549")
 
 
 def build_campaign_plan(config: RunConfig, corpus: FrozenPromptCorpus) -> CampaignPlan:
@@ -113,9 +113,9 @@ def build_campaign_plan(config: RunConfig, corpus: FrozenPromptCorpus) -> Campai
                 for segmentation in segmentations
             )
         decode_prompt = by_id[config.identity.decode_prompt_ids[("short", "medium", "long").index(length_class)]]
-        calibration.append(CampaignPath(decode_prompt, ExecutionMode.DECODE_CACHED))
         if length_class in config.identity.recompute_classes:
             calibration.append(CampaignPath(decode_prompt, ExecutionMode.DECODE_RECOMPUTE))
+        calibration.append(CampaignPath(decode_prompt, ExecutionMode.DECODE_CACHED))
 
     plan = CampaignPlan(
         corpus_sha256=corpus.corpus_sha256,

@@ -220,11 +220,10 @@ def main() -> int:
                 "status": "PASS",
                 "message": "LEGACY SCHEDULE MATRIX COMPLETE — NOT AN IDENTITY VERDICT",
                 "configurations": len(matrix["configurations"]),
-                "stop_pod_before_analysis": True,
+                "pod_action_required": None,
             },
         )
         print("LEGACY SCHEDULE MATRIX: PASS")
-        print("STOP POD BEFORE ANALYSIS")
         return 0
     except Exception as exc:  # noqa: BLE001 - preserve partial diagnostic evidence
         matrix["status"] = "FAIL"
@@ -247,12 +246,11 @@ def main() -> int:
                 "status": "FAIL",
                 "exception": type(exc).__name__,
                 "message": str(exc),
-                "stop_pod_before_analysis": True,
+                "pod_action_required": None,
             },
         )
         print("LEGACY SCHEDULE MATRIX: FAIL")
         print(f"  {type(exc).__name__}: {exc}")
-        print("STOP POD BEFORE ANALYSIS")
         return 1
     finally:
         del handle

@@ -10,7 +10,7 @@ def _estimator():
     )
 
 
-def test_corrected_main_campaign_cost_is_stable():
+def test_balanced_cross_path_main_campaign_cost_is_stable():
     values = _estimator()
     prompts = values["PROMPTS"]
     aggregate = values["_aggregate"]
@@ -30,18 +30,21 @@ def test_corrected_main_campaign_cost_is_stable():
         if length_class != "long":
             total += aggregate(decode_prompt, "decode_recompute")
 
-    assert total.forwards == 1_416
-    assert round(total.transfer_bytes / 2**30, 2) == 58.35
+    assert total.forwards == 1_728
+    assert round(total.transfer_bytes / 2**30, 2) == 57.19
 
 
-def test_final_session_includes_preflight_snapshot_and_accumulation_probe():
+def test_final_session_includes_balanced_legacy_and_cross_path_probe():
     values = _estimator()
     cost_type = values["Cost"]
-    phases = values["_phase_costs"]((1_416, 0, 0))
+    phases = values["_phase_costs"]((1_728, 0, 0))
     by_name = {name: cost for name, cost, _ in phases}
     total = sum((cost for _, cost, _ in phases), cost_type(0, 0, 0, ""))
 
-    assert by_name["Préflight chronométré"].forwards == 207
+    assert by_name["Préflight chronométré"].forwards == 333
+    assert by_name["Gate inertie trace"].forwards == 120
     assert by_name["Snapshot/restore réel"].forwards == 48
-    assert by_name["Sonde accumulation 64"].forwards == 1_280
-    assert total.forwards == 4_139
+    assert by_name["Continuité legacy"].forwards == 3_552
+    assert by_name["Plancher de bruit"].forwards == 624
+    assert by_name["Sonde accumulation 64"].forwards == 2_048
+    assert total.forwards == 8_549

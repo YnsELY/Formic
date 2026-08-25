@@ -241,8 +241,8 @@ This discipline makes it possible to distinguish between:
 ## How the Project Will Be Built
 
 Development follows eight strictly ordered steps. A step is not considered
-validated without tests, a report, documented status, and human validation where
-required.
+validated without tests, a report, documented status, and explicit sign-off
+where required.
 
 ### Part 1: Foundations
 
@@ -287,8 +287,9 @@ baseline.
 SPEC-01 (the first step of Part 1) is complete at 9/9.
 SPEC-02, which turns that preliminary evidence into a blocking identity gate
 and adds measured tolerances plus snapshot/restore, is in progress. The local
-implementation and the one-process A40 campaign launcher are complete; the
-final A40 calibration has not yet run.
+implementation and the one-process A40 campaign launcher are complete. The
+launcher has been adapted to the r6 schedule matrix and r2 balanced crossover;
+the final A40 tolerance calibration has not yet run.
 
 SPEC-02 is currently pinned to the following protocol:
 
@@ -302,6 +303,10 @@ SPEC-02 is currently pinned to the following protocol:
 - the 64-frame logits-only accumulation probe remains mandatory for one short
   and one medium prompt;
 - the A40 session is one model process and one full checkpoint load;
+- the exact legacy gate rotates RR/NN/RN/NR through all four Latin ABBA slots;
+- the logits noise floor uses the stable alternating r6 calendar;
+- the loaded backbone must match the committed 851-tensor content hash and the
+  default A40 placement cap is 35 GiB;
 - the preflight reports load time, per-post duration estimates, and total
   duration, then continues automatically without a budget gate.
 
@@ -323,6 +328,8 @@ SPEC-02 is currently pinned to the following protocol:
 - the post-preflight duration reporter in `scripts/step2_budget_gate.py`;
 - the resumable, single-load A40 calibration launcher in
   `scripts/step2_a40_campaign.py`;
+- cross-path calibration that measures segmented versus full-prefix prefill and
+  cached versus full-recomputation decode for short/medium prompts;
 - weight-free tests and A11/A12 safeguards.
 
 ### Backbone Validation Status
@@ -382,7 +389,9 @@ python scripts/step1_acceptance.py --stage all
 The final A40 calibration is launched only from a clean pod checkout with the
 checkpoint mounted at `/workspace/Qwen3.8-27B` and one visible NVIDIA A40. It
 loads the model exactly once, runs the preflight first, displays the measured
-estimate, and then continues automatically:
+estimate, and then continues automatically. The current audited plan contains
+8,549 forwards; the historical short-shape projection is 7.31 hours, while the
+measured post-preflight estimate is authoritative for the current pod:
 
 ```bash
 python scripts/step2_a40_campaign.py \
@@ -395,8 +404,8 @@ corpus and backbone hashes still match. The first run writes raw measurements,
 `tolerances.candidate.json` and `verdict.candidate.json`, then reports
 `CALIBRATION COMPLETE — PROMOTION REQUIRED`; it cannot claim an official PASS
 before human review and promotion of the measured tolerances. The command stops
-on the first hard gate failure. It prints `STOP POD BEFORE ANALYSIS` when it
-returns; stopping the cloud pod itself remains an operator action.
+on the first hard gate failure. It does not stop the pod and does not request a
+pod action.
 
 After reviewing the artefacts, prepare a JSON mapping from each bounded
 `mode/point/length_class` key to its human-approved physical justification,
@@ -469,6 +478,8 @@ The essential principles are:
   validated horizon-8 protocol and tolerance governance;
 - [`reports/step2_a40_campaign_cost_plan.md`](reports/step2_a40_campaign_cost_plan.md):
   final A40 sequence, forwards, transfers, and preflight estimates;
+- [`reports/step2_campaign_readiness_report.md`](reports/step2_campaign_readiness_report.md):
+  A40 diagnostic evidence, launcher corrections, and remaining GPU condition;
 - [`reports/`](reports/): technical and step reports;
 - [`experiments/REGISTRY.md`](experiments/REGISTRY.md): experiment registry.
 

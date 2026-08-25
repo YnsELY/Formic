@@ -72,11 +72,7 @@ def promote_candidate_tolerances(
                             "continuation_seed": item["continuation_seed"],
                             "repetition": item["repetition"],
                             "max_abs_delta": item["max_abs_delta"],
-                            # The economical reference-floor phase records
-                            # logits only.  Non-logit exact rows have zero
-                            # measured delta; bounded rows require human
-                            # review before reaching this promotion step.
-                            "reference_floor": 0.0,
+                            "reference_floor": item["reference_floor"],
                         }
                         for item in observations
                     ],

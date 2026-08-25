@@ -90,6 +90,43 @@ def expected_shapes(
     raise ValueError(f"unsupported mode {mode}")
 
 
+def reference_shapes_for_candidate(
+    *,
+    prompt_length: int,
+    candidate_mode: ExecutionMode,
+    segmentation: str | None,
+    decode_steps: int,
+    length_class: str,
+) -> tuple[InputShape, ...]:
+    """Return the canonical reference shapes for one numerical path comparison.
+
+    Wrapper identity is gated separately by the balanced endpoint crossover.
+    Numerical calibration therefore compares segmented prefill with full-prefix
+    recomputation and cached decode with full recomputation.  Long cached decode
+    retains a cached reference because long recomputation is outside SPEC-02.
+    """
+    if candidate_mode is ExecutionMode.PREFILL_SEGMENTED:
+        if segmentation is None:
+            raise ValueError("segmented prefill requires a strategy")
+        return tuple(
+            InputShape(1, part.stop, 0)
+            for part in segment_slices(prompt_length, segmentation)
+        )
+    if candidate_mode is ExecutionMode.DECODE_CACHED and length_class != "long":
+        return expected_shapes(
+            prompt_length=prompt_length,
+            mode=ExecutionMode.DECODE_RECOMPUTE,
+            segmentation=None,
+            decode_steps=decode_steps,
+        )
+    return expected_shapes(
+        prompt_length=prompt_length,
+        mode=candidate_mode,
+        segmentation=segmentation,
+        decode_steps=decode_steps,
+    )
+
+
 @torch.no_grad()
 def execute_path(
     endpoint: Endpoint,
@@ -170,6 +207,144 @@ def execute_path(
     if not capture:
         return None
     return PathTrace(endpoint.name, tuple(frames))
+
+
+@torch.no_grad()
+def execute_reference_for_candidate(
+    endpoint: Endpoint,
+    *,
+    prompt_token_ids: tuple[int, ...],
+    candidate_mode: ExecutionMode,
+    length_class: str,
+    segmentation: str | None = None,
+    forced_token_ids: tuple[int, ...] = (),
+    capture: bool,
+) -> PathTrace | None:
+    """Execute the canonical stock reference for a candidate execution path.
+
+    This is orchestration over intact Hugging Face forwards (A11).  It never
+    supplies a cache to a no-cache reference (A1), and all candidate caches are
+    still created by :func:`execute_path` with the model config (A2/A3/A4).
+    """
+    if candidate_mode is ExecutionMode.PREFILL_SEGMENTED:
+        if segmentation is None:
+            raise ValueError("segmented prefill requires a strategy")
+        frames: list[Frame] = []
+        for step, part in enumerate(segment_slices(len(prompt_token_ids), segmentation)):
+            prefix = prompt_token_ids[: part.stop]
+            trace = execute_path(
+                endpoint,
+                prompt_token_ids=prefix,
+                mode=ExecutionMode.PREFILL_FULL,
+                length_class=length_class,
+                capture=capture,
+            )
+            if capture:
+                assert trace is not None and len(trace.frames) == 1
+                frame = trace.frames[0]
+                frames.append(Frame(step, frame.shape, frame.trace))
+        return PathTrace(endpoint.name, tuple(frames)) if capture else None
+
+    reference_mode = (
+        ExecutionMode.DECODE_RECOMPUTE
+        if candidate_mode is ExecutionMode.DECODE_CACHED and length_class != "long"
+        else candidate_mode
+    )
+    return execute_path(
+        endpoint,
+        prompt_token_ids=prompt_token_ids,
+        mode=reference_mode,
+        length_class=length_class,
+        segmentation=segmentation,
+        forced_token_ids=forced_token_ids,
+        capture=capture,
+    )
+
+
+def _to_cpu(value: Any) -> Any:
+    """Deep-copy a measured trace to CPU so GPU execution storage can die."""
+    if isinstance(value, torch.Tensor):
+        return value.detach().to(device="cpu", copy=True)
+    if is_dataclass(value):
+        return type(value)(
+            **{field.name: _to_cpu(getattr(value, field.name)) for field in fields(value)}
+        )
+    if isinstance(value, tuple):
+        return tuple(_to_cpu(item) for item in value)
+    if isinstance(value, list):
+        return [_to_cpu(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _to_cpu(item) for key, item in value.items()}
+    return value
+
+
+@torch.no_grad()
+def run_cross_path_pair(
+    reference: Endpoint,
+    candidate: Endpoint,
+    *,
+    prompt_token_ids: tuple[int, ...],
+    candidate_mode: ExecutionMode,
+    length_class: str,
+    segmentation: str | None = None,
+    forced_token_ids: tuple[int, ...] = (),
+    capture: bool,
+) -> PairTrace:
+    """Compare a Formic path with its canonical stock numerical reference.
+
+    The endpoint-wrapper identity question is deliberately not answered here;
+    it belongs to the balanced crossover gate.  This function measures only
+    the cross-path numerical effect required for SPEC-02 tolerances.
+    """
+    reference_trace = execute_reference_for_candidate(
+        reference,
+        prompt_token_ids=prompt_token_ids,
+        candidate_mode=candidate_mode,
+        length_class=length_class,
+        segmentation=segmentation,
+        forced_token_ids=forced_token_ids,
+        capture=capture,
+    )
+    if capture:
+        assert reference_trace is not None
+        reference_trace = _to_cpu(reference_trace)
+    candidate_trace = execute_path(
+        candidate,
+        prompt_token_ids=prompt_token_ids,
+        mode=candidate_mode,
+        length_class=length_class,
+        segmentation=segmentation,
+        forced_token_ids=forced_token_ids,
+        capture=capture,
+    )
+    if not capture:
+        return PairTrace("", "", None, 0)
+    assert reference_trace is not None and candidate_trace is not None
+    candidate_trace = _to_cpu(candidate_trace)
+    if len(reference_trace.frames) != len(candidate_trace.frames):
+        raise RuntimeError("cross-path reference/candidate frame counts differ")
+    comparisons = tuple(
+        compare_forward_traces(
+            ref_frame.trace,
+            cand_frame.trace,
+            step=cand_frame.step,
+            mode=candidate_mode,
+            length_class=length_class,
+            input_shape=cand_frame.shape,
+            allow_cache_applicability_mismatch=True,
+            align_reference_hidden_tail=True,
+        )
+        for ref_frame, cand_frame in zip(reference_trace.frames, candidate_trace.frames)
+    )
+    payload = AlignedCasePayload(reference_trace, candidate_trace, comparisons)
+    ref_fingerprint, ref_count = path_fingerprint(reference_trace)
+    cand_fingerprint, cand_count = path_fingerprint(candidate_trace)
+    return PairTrace(
+        ref_fingerprint,
+        cand_fingerprint,
+        payload,
+        ref_count + cand_count,
+    )
 
 
 def run_aligned_pair(

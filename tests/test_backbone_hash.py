@@ -5,7 +5,10 @@ import pytest
 from safetensors.torch import save_file
 
 from formic.backbone.inventory import CheckpointInventory, InventoryError, TensorRecord
-from formic.science.backbone_hash import canonical_backbone_hash
+from formic.science.backbone_hash import (
+    canonical_backbone_hash,
+    load_reusable_backbone_hash,
+)
 
 
 def _inventory(root, *, changed=False):
@@ -64,3 +67,15 @@ def test_canonical_hash_rejects_wrong_tensor_count(tmp_path):
     root.mkdir()
     with pytest.raises(InventoryError, match="expects 851"):
         canonical_backbone_hash(_inventory(root))
+
+
+def test_committed_a40_backbone_hash_is_strict_and_reusable():
+    value = load_reusable_backbone_hash(
+        "configs/checkpoint_metadata/qwen3_8_27b/backbone_hash.json"
+    )
+
+    assert value.sha256 == (
+        "74e1813c29b065406f4b772ed7c9059b8455428bff9aa6e572645cf09743c662"
+    )
+    assert value.tensor_count == 851
+    assert value.payload_bytes == 53_791_996_928

@@ -14,6 +14,24 @@ out-of-criterion backend limitation. SPEC-02 must turn that conclusion into a
 blocking gate while measuring the separate numerical effects of segmentation,
 cached versus recomputed decoding, and snapshot/restore.
 
+The A40 diagnostics performed before calibration refined the meaning of
+"aligned". The complete balanced crossover
+`balanced-crossover-2026-08-24-r2` measured 1,536/1,536 exact endpoint
+comparisons at the same round-relative crossover slot, with zero delta and
+zero KL. At the same time, 336/384 raw ordinal groups changed and the raw
+RR/NN controls were not uniformly stable. These are measurements only; no
+root cause is assigned. They show that raw fingerprints from distinct
+process-lifetime ordinals cannot be made a blocking substitute for the
+matched endpoint contrast already accepted by ADR-0004.
+
+The earlier schedule matrix r6 also established that the alternating calendar
+completed without OOM, returned to its post-load allocation after warmup, and
+made all three RR/NN/RN controls stable over their last two repetitions. This
+calendar is therefore retained for the economical reference floor. The
+official wrapper gate uses the stronger four-round Latin ABBA crossover: every
+RR/NN/RN/NR treatment occupies each of the four configuration ordinals before
+a contrast is admitted.
+
 The recurrent GDN state is persisted in BF16 and is updated in place. A
 segmentation boundary can therefore change rounding even when the mathematical
 token sequence is unchanged. Any bounded threshold must be derived from
@@ -21,9 +39,26 @@ repeated measurement, never selected from intuition or a single run.
 
 ## Proposed decision
 
-The reference is the explicit text-only `Qwen3_5ForCausalLM` loop. All compared
-paths run at aligned execution ordinals in one process. `generate()` is not an
-identity oracle.
+The reference is the explicit text-only `Qwen3_5ForCausalLM` loop. Wrapper
+identity is decided from matched round-relative endpoint contrasts in one
+process. Actual process-lifetime ordinals remain recorded and are explicitly
+distinct; the report must never describe them as equal. Raw cross-ordinal
+fingerprints remain non-blocking diagnostics. `generate()` is not an identity
+oracle.
+
+The last-two matched signature contains only endpoint-difference invariants:
+exactness, delta, KL, top-1 agreement and first differing coordinate/value. It
+does not contain the absolute token ID or an endpoint's raw fingerprint; those
+would reintroduce the cross-ordinal condition that the crossover was designed
+to control.
+
+Numerical calibration is a separate question from wrapper identity. Segmented
+prefill is compared against stock full-prefix recomputation at every segment
+boundary. Cached decode is compared against stock full recomputation for short
+and medium prompts. Long cached decode retains a stock cached reference because
+long full recomputation is outside the validated plan. This separation ensures
+that the tolerance campaign actually measures segmentation and BF16 recurrent
+state effects instead of comparing two copies of the same path.
 
 Four execution paths are covered: monolithic prefill, segmented prefill,
 cached decode, and full-recomputation decode. Greedy and fixed-seed sampling
@@ -41,8 +76,10 @@ threshold.
 
 For each exact input length, six traces warm the path with no state capture.
 Six warmups are shared once per exact input shape and process. Three traces are
-then measured per configuration. The last two measured traces must be
-bit-exact or the whole case is invalid.
+then measured per tolerance configuration. The exact legacy continuity gate
+uses the two repetitions required to assert last-two stability, outside
+calibration. The last two measured traces or matched contrast signatures must
+be bit-exact or the case is invalid.
 
 Inference measurements do not vary the RNG seed: every compared forward uses
 a forced continuation, stock inference has no active dropout, and token
@@ -73,7 +110,11 @@ the newly materialised tolerances without rerunning the model.
 
 The default criterion is exact. Where repeated measurement proves a bounded
 criterion necessary, the threshold is twice the maximum observed delta across
-the three repetitions, and never below the reference/reference floor.
+the three repetitions, and never below the reference/reference floor. The
+floor is measured logits-only on `audit_echo`, the pinned short prompt and the
+pinned medium prompt under the alternating RR/NN/RN schedule. The maximum RR
+delta is propagated into every logits candidate row; it is never hard-coded to
+zero during promotion.
 Blocking metrics are 100% top-1 agreement at aligned protocol and maximum
 absolute delta. KL is recorded but non-blocking. Tolerances are keyed by length
 class while evidence retains every exact input length.
@@ -91,7 +132,19 @@ Any future change requires an ADR and invalidates prior verdicts.
 The A40 preflight writes measured path timings, the single model-load duration,
 and a per-phase total-duration estimate. The report is informational: it takes
 no budget argument, returns success, and the session continues automatically.
-The planned session is one process and one complete model load.
+The planned session is one process and one complete model load. The official
+launcher pins the A40 placement cap to 35 GiB, the value under which the r6 and
+r2 diagnostics completed without OOM. It verifies the loaded 851-tensor
+backbone against committed hash
+`74e1813c29b065406f4b772ed7c9059b8455428bff9aa6e572645cf09743c662`
+before the first identity measurement.
+
+The revised plan contains 8,549 model forwards: 333 preflight, 120 trace
+inertness, 3,552 legacy crossover, 624 noise floor, 48 snapshot/restore, 96
+reference continuation generation, 1,728 main calibration and 2,048 for the
+64-frame cached-versus-recompute probe. The historical short-shape sensitivity
+projection is 7.31 hours; the real post-preflight estimate supersedes it and
+remains informational.
 
 No numerical tolerance is proposed in this ADR. `tolerances.json` will be
 created only by the final A40 calibration campaign.
@@ -122,6 +175,8 @@ created only by the final A40 calibration campaign.
 | A priori epsilon | Violates the measured-tolerance requirement. |
 | Average across seeds/repetitions | A blocking identity gate must cover the measured worst case. |
 | KL as a blocking metric | KL remains diagnostic; top-1 plus delta gives the accepted gate semantics. |
+| Fixed-order RR/NN/RN/NR quartet | It falsely conflates four configuration ordinals; the measured ordinal effect requires Latin rotation before matching. |
+| Raw RR/NN fingerprint stability as wrapper verdict | The r2 evidence compares distinct process-lifetime ordinals; matched endpoint contrasts are the interpretable identity evidence. |
 | Full cache copied at all 17 boundaries | Redundant and too costly; each group state is captured once at its natural boundary. |
 | Full boundary capture for 2k–4k prompts | Excessive memory and transfer cost; long prompts retain logits plus final state. |
 | Full-recomputation decode for 2k–4k prompts | Repeats a complete long prefill at every token; short and medium retain this comparison. |
@@ -142,11 +197,18 @@ created only by the final A40 calibration campaign.
   eight-frame tolerance.
 - The final threshold table remains pending measurements; the preflight timing
   report is written before any identity measurement begins.
+- A completed diagnostic can be reassessed without mutation by
+  `scripts/step2_reassess_crossover.py`; the source artefact and its hashes stay
+  immutable.
 
 ## Evidence
 
 - Existing baseline: `EXP-0008`, ADR-0004, and step-1 diagnostic reports.
+- A40 schedule matrix r6: six complete configurations, no OOM; alternating
+  RR/NN/RN controls stable over the recorded repetitions.
+- A40 balanced crossover r2: 1,536/1,536 same-slot endpoint comparisons exact;
+  336/384 raw ordinal groups changed; diagnostic status `COMPLETE`.
 - Weight-free seed control: `tests/test_forced_continuation.py`, seeds 101/909,
   same forced continuation, exact logits at every step.
 - Planned calibration experiment: to be allocated before the A40 session.
-- No SPEC-02 numerical measurements exist yet.
+- No tolerance-calibration measurement or official SPEC-02 verdict exists yet.

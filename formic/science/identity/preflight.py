@@ -11,20 +11,24 @@ from formic.backbone.loader import BackboneHandle
 from formic.science.identity.artifacts import atomic_write_json
 from formic.science.identity.budget import EXPECTED_PHASE_FORWARDS, PhaseEstimate, PreflightEstimate
 from formic.science.identity.campaign_plan import CampaignPath, CampaignPlan, timing_continuation
-from formic.science.identity.executor import Endpoint, execute_path
+from formic.science.identity.executor import (
+    Endpoint,
+    execute_path,
+    execute_reference_for_candidate,
+)
 
 
 # Volumes from the approved cost plan.  They are estimates only; the exact
 # captured-state accounting remains in every measured case artefact.
 _PHASE_TRANSFER_GIB = {
-    "trace_inertness": 1.82,
-    "legacy_continuity": 0.09,
+    "trace_inertness": 2.81,
+    "legacy_continuity": 1.42,
     "noise_floor": 0.20,
     "snapshot_restore": 3.61,
     "reference_continuations": 0.0,
-    "short": 18.10,
-    "medium": 29.35,
-    "long": 10.90,
+    "short": 14.75,
+    "medium": 27.94,
+    "long": 14.49,
     "accumulation_probe_64": 0.24,
 }
 
@@ -34,10 +38,17 @@ class PathTiming:
     path: CampaignPath
     dry_seconds: float
     measured_seconds: tuple[float, float]
+    reference_dry_seconds: float | None = None
+    reference_measured_seconds: tuple[float, float] | None = None
 
     @property
     def conservative_seconds(self) -> float:
         return max(self.measured_seconds)
+
+    @property
+    def reference_conservative_seconds(self) -> float:
+        measured = self.reference_measured_seconds or self.measured_seconds
+        return max(measured)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -49,6 +60,16 @@ class PathTiming:
             "dry_seconds": self.dry_seconds,
             "measured_seconds": list(self.measured_seconds),
             "conservative_seconds": self.conservative_seconds,
+            "reference_dry_seconds": (
+                self.dry_seconds
+                if self.reference_dry_seconds is None
+                else self.reference_dry_seconds
+            ),
+            "reference_measured_seconds": list(
+                self.reference_measured_seconds or self.measured_seconds
+            ),
+            "reference_conservative_seconds": self.reference_conservative_seconds,
+            "reference_reuses_candidate_timing": self.reference_measured_seconds is None,
         }
 
 
@@ -90,10 +111,11 @@ def run_preflight(
     details_path: str | Path,
     memory_observer: Callable[[str], None] | None = None,
 ) -> PreflightRun:
-    """Time the approved 18 paths without any identity-state capture.
+    """Time the 18 candidates and distinct canonical companions without capture.
 
-    Each path is executed once as a dry trace and twice as a timed trace.  The
-    slower timed execution drives the informational duration estimate.
+    Each execution is run once dry and twice timed. Identical reference and
+    candidate paths reuse one timing; segmented-prefix and cached/recompute
+    comparisons are timed separately. The slower execution drives the report.
     """
     plan.validate()
     endpoint = Endpoint("reference", handle.model, handle.view, False)
@@ -105,7 +127,24 @@ def run_preflight(
             _time_path(endpoint, path, handle.config.identity.decode_tokens),
             _time_path(endpoint, path, handle.config.identity.decode_tokens),
         )
-        timings.append(PathTiming(path, dry, timed))
+        if _reference_reuses_candidate_timing(path):
+            reference_dry = None
+            reference_timed = None
+        else:
+            reference_dry = _time_reference_path(
+                endpoint, path, handle.config.identity.decode_tokens
+            )
+            reference_timed = (
+                _time_reference_path(
+                    endpoint, path, handle.config.identity.decode_tokens
+                ),
+                _time_reference_path(
+                    endpoint, path, handle.config.identity.decode_tokens
+                ),
+            )
+        timings.append(
+            PathTiming(path, dry, timed, reference_dry, reference_timed)
+        )
         # Release transient workspaces only after the complete path.  Doing it
         # between measured repetitions would perturb the allocation history
         # that this protocol intentionally observes.
@@ -168,6 +207,38 @@ def _time_path(endpoint: Endpoint, path: CampaignPath, decode_steps: int) -> flo
     return elapsed
 
 
+def _reference_reuses_candidate_timing(path: CampaignPath) -> bool:
+    return (
+        path.mode.value in ("prefill_full", "decode_recompute")
+        or (path.mode.value == "decode_cached" and path.prompt.length_class == "long")
+    )
+
+
+def _time_reference_path(
+    endpoint: Endpoint, path: CampaignPath, decode_steps: int
+) -> float:
+    _synchronise()
+    started = time.perf_counter()
+    execute_reference_for_candidate(
+        endpoint,
+        prompt_token_ids=path.prompt.token_ids,
+        candidate_mode=path.mode,
+        length_class=path.prompt.length_class,
+        segmentation=path.segmentation,
+        forced_token_ids=(
+            timing_continuation(path.prompt, decode_steps)
+            if path.mode.value.startswith("decode_")
+            else ()
+        ),
+        capture=False,
+    )
+    _synchronise()
+    elapsed = time.perf_counter() - started
+    if elapsed <= 0:
+        raise RuntimeError("reference preflight clock produced a non-positive duration")
+    return elapsed
+
+
 def _synchronise() -> None:
     import torch
 
@@ -216,6 +287,10 @@ def _estimate_from_timings(
         (item.path.prompt.length_class, item.path.mode.value, item.path.segmentation): item.conservative_seconds
         for item in timings
     }
+    reference_lookup = {
+        (item.path.prompt.length_class, item.path.mode.value, item.path.segmentation): item.reference_conservative_seconds
+        for item in timings
+    }
 
     def path_time(length_class: str, mode: str, segmentation: str | None = None) -> float:
         try:
@@ -223,29 +298,40 @@ def _estimate_from_timings(
         except KeyError as exc:
             raise RuntimeError(f"preflight did not time {length_class}/{mode}/{segmentation}") from exc
 
+    def reference_time(
+        length_class: str, mode: str, segmentation: str | None = None
+    ) -> float:
+        try:
+            return reference_lookup[(length_class, mode, segmentation)]
+        except KeyError as exc:
+            raise RuntimeError(
+                f"preflight did not time canonical reference {length_class}/{mode}/{segmentation}"
+            ) from exc
+
     def with_transfer(name: str, execution_seconds: float) -> float:
         return execution_seconds + (_PHASE_TRANSFER_GIB[name] * 2**30 / transfer_bytes_per_second)
 
     phase_seconds: dict[str, float] = {}
     phase_seconds["trace_inertness"] = with_transfer(
         "trace_inertness",
-        20 * path_time("short", "prefill_full")
+        80 * path_time("short", "prefill_full")
         + 20 * path_time("medium", "prefill_full")
         + 20 * path_time("long", "prefill_full"),
     )
     phase_seconds["legacy_continuity"] = with_transfer(
-        "legacy_continuity", 60 * path_time("short", "decode_cached")
+        "legacy_continuity", 444 * path_time("short", "decode_cached")
     )
     phase_seconds["noise_floor"] = with_transfer(
         "noise_floor",
-        48 * path_time("short", "decode_cached") + 24 * path_time("medium", "decode_cached"),
+        48 * path_time("short", "decode_cached")
+        + 30 * path_time("medium", "decode_cached"),
     )
     phase_seconds["snapshot_restore"] = with_transfer(
         "snapshot_restore", 6 * path_time("short", "decode_cached")
     )
     phase_seconds["reference_continuations"] = with_transfer(
         "reference_continuations",
-        3 * (
+        4 * (
             path_time("short", "decode_cached")
             + path_time("medium", "decode_cached")
             + path_time("long", "decode_cached")
@@ -255,20 +341,32 @@ def _estimate_from_timings(
         segmentations = ("median", "quarters") if length_class == "long" else (
             "early", "median", "late", "quarters"
         )
-        prefill_paths = path_time(length_class, "prefill_full") + sum(
-            path_time(length_class, "prefill_segmented", item) for item in segmentations
+        prefill_paths = 24 * path_time(length_class, "prefill_full") + 18 * sum(
+            path_time(length_class, "prefill_segmented", item)
+            + reference_time(length_class, "prefill_segmented", item)
+            for item in segmentations
         )
-        decode_paths = 18 * path_time(length_class, "decode_cached")
-        if length_class != "long":
-            decode_paths += 18 * path_time(length_class, "decode_recompute")
+        if length_class == "long":
+            decode_paths = 18 * path_time(length_class, "decode_cached")
+        else:
+            # The cached candidate is calibrated against a full-recompute
+            # reference: 12 cached path traces + 6 recompute traces, in
+            # addition to the 18 recompute/recompute path traces.
+            decode_paths = (
+                12 * path_time(length_class, "decode_cached")
+                + 6 * reference_time(length_class, "decode_cached")
+                + 18 * path_time(length_class, "decode_recompute")
+            )
         phase_seconds[length_class] = with_transfer(
             length_class,
-            24 * prefill_paths + decode_paths,
+            prefill_paths + decode_paths,
         )
     phase_seconds["accumulation_probe_64"] = with_transfer(
         "accumulation_probe_64",
-        640 * (path_time("short", "decode_cached") / 8)
-        + 640 * (path_time("medium", "decode_cached") / 8),
+        512 * (path_time("short", "decode_cached") / 8)
+        + 512 * (reference_time("short", "decode_cached") / 8)
+        + 512 * (path_time("medium", "decode_cached") / 8)
+        + 512 * (reference_time("medium", "decode_cached") / 8),
     )
     phases = tuple(
         PhaseEstimate(name, EXPECTED_PHASE_FORWARDS[name], phase_seconds[name])

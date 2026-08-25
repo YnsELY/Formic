@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -26,6 +27,11 @@ def main() -> int:
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--sampled-continuation-seed", type=int, required=True)
+    parser.add_argument(
+        "--gpu-max-memory",
+        default="35GiB",
+        help="A40 placement cap validated by the balanced crossover",
+    )
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
 
@@ -35,6 +41,13 @@ def main() -> int:
     from formic.science.determinism import prepare_backend_environment
 
     config = load_config(args.config)
+    config = replace(
+        config,
+        backbone=replace(
+            config.backbone,
+            max_memory={**config.backbone.max_memory, "0": args.gpu_max_memory},
+        ),
+    )
     prepare_backend_environment(config.numerics)
     from formic.science.identity.campaign import run_gpu_campaign
 
@@ -50,7 +63,6 @@ def main() -> int:
         print(f"  {type(exc).__name__}: {exc}")
         return 1
     print(f"IDENTITY CHECK: {result.message}")
-    print("STOP POD BEFORE ANALYSIS")
     return 0 if result.completed else 1
 
 

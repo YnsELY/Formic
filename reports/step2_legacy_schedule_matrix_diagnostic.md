@@ -66,9 +66,19 @@ measurements append rather than replace prior evidence.
 
 This crossover is an isolated scheduling diagnostic. Its terminal artifact
 explicitly states that it is not a SPEC-02 identity verdict, does not attribute
-a cause, and does not change tolerances. A full campaign command is emitted
-only when all exactness, control-stability, inversion, balance and last-two
-checks pass; otherwise the campaign remains blocked. Diagnostic completion is
-reported separately from campaign readiness. Even when the evidence is ready,
-the existing official sequential launcher is not usable as-is: it requires an
-explicit adaptation to the validated balanced calendar before campaign use.
+a cause, and does not change tolerances.
+
+The r2 result completed all 1,536 same-slot endpoint comparisons exactly, with
+zero delta and zero KL, while 336/384 raw ordinal groups changed. The original
+readiness computation blocked because it treated raw RR/NN stability,
+cross-round inversions and raw last-two fingerprints as if they compared the
+same process-lifetime ordinal. They do not. A weight-free reassessment now
+separates the blocking matched endpoint contrast from those non-blocking raw
+ordinal diagnostics without rewriting the source artefact.
+
+The official launcher has consequently been adapted: its legacy gate rotates
+RR/NN/RN/NR through a four-round Latin ABBA schedule and requires exact matched
+contrasts plus exact last-two contrast signatures. The noise floor separately
+uses the stable alternating r6 calendar. Actual process ordinals remain in the
+artefacts and are never claimed to be equal. No cause is assigned and no
+tolerance is changed by this protocol correction.

@@ -16,6 +16,12 @@ off. Nothing downstream starts before that (plan rule 1).
 > oracle because it follows a different call convention from the pinned explicit
 > CausalLM loop. ADR-0004 is ACCEPTED by Yanis. SPEC-02 now owns the formal
 > blocking identity gate, measured tolerances, and snapshot/restore primitive.
+> The A40 r2 crossover measured 1,536/1,536 exact same-slot endpoint
+> comparisons while raw process ordinals varied. The official launcher now
+> uses a truthful four-slot Latin ABBA legacy gate, an alternating r6 noise
+> floor, committed backbone-hash verification and explicit cross-path
+> calibration. The 8,549-forward calibration remains to be run; no tolerance
+> or official SPEC-02 PASS exists yet.
 
 Reference documents, in order of authority: the checkpoint audit
 (`/workspace/audits/qwen3_8_27b/`) → `FINAL_TARGET_ARCHITECTURE.md` (CAPE-R) →
@@ -33,8 +39,8 @@ Reference documents, in order of authority: the checkpoint audit
 | 6 | Hybrid group view, 16×(3 GDN + 1 attention) (A11) | 1 | VALIDÉE | `formic/backbone/groups.py`, `tests/test_groups.py` |
 | 7 | 17 inert boundary insertion points | 1 | VALIDÉE | `formic/backbone/boundaries.py`, `tests/test_boundaries.py` |
 | 8 | Native generation through Formic (greedy + sampled) | 1 | VALIDÉE | `formic/backbone/runner.py`, `artifacts/step1/` |
-| 9 | Identity baseline + numeric tolerances (E4) | 2 | EN COURS | ADR-0005 PROPOSED; corpus v2 gelé; launcher A40 monoprocessus prêt, calibration réelle en attente |
-| 10 | Snapshot / restore / fork primitive | 2 | EN COURS | `formic/state/` |
+| 9 | Identity baseline + numeric tolerances (E4) | 2 | EN COURS | ADR-0005 PROPOSED; corpus v2 gelé; launcher A40 Latin-ABBA/cross-path prêt; calibration réelle en attente |
+| 10 | Snapshot / restore / fork primitive | 2 | EN COURS | `formic/state/`; tests synthétiques verts; adjudication checkpoint réel intégrée à la campagne |
 | 11 | Evaluation harness + pinned baselines (E1) | 3 | À VENIR | — |
 | 12 | ContractIR + three-pass compiler | 4 | À VENIR | — |
 | 13 | State Fabric (repo snapshot, DAG, evidence, ledger) | 4 | À VENIR | — |

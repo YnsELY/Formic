@@ -27,7 +27,7 @@ def test_preflight_estimate_is_schema_valid_and_informational_for_every_phase():
 
     estimate.validate()
     assert estimate.model_processes == 1
-    assert estimate.preflight_forwards == 207
+    assert estimate.preflight_forwards == 333
     assert [item.name for item in estimate.phases] == [
         "trace_inertness",
         "legacy_continuity",
@@ -50,3 +50,25 @@ def test_release_cuda_working_set_flushes_inactive_allocator(monkeypatch):
     release_cuda_working_set()
 
     assert calls == ["synchronize", "empty_cache"]
+
+
+def test_distinct_canonical_reference_timing_is_not_replaced_by_candidate_time():
+    config = load_config("configs/default.yaml")
+    corpus = load_frozen_corpus("configs/reference_prompts.yaml")
+    plan = build_campaign_plan(config, corpus)
+    timings = []
+    for path in plan.preflight_paths:
+        reference = None
+        if path.mode.value == "prefill_segmented":
+            reference = (4.0, 5.0)
+        timings.append(PathTiming(path, 1.0, (1.0, 1.0), 4.0, reference))
+
+    estimate = _estimate_from_timings(
+        timings,
+        model_load_seconds=1.0,
+        preflight_elapsed_seconds=1.0,
+        transfer_bytes_per_second=8 * 2**30,
+    )
+
+    short = next(item for item in estimate.phases if item.name == "short")
+    assert short.estimated_seconds > 18 * 4 * 5.0

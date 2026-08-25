@@ -7,14 +7,20 @@ import pytest
 import torch
 
 from formic.science.identity.artifacts import ArtifactError, CampaignIdentity, IncrementalCampaignWriter
-from formic.science.identity.campaign import _MeasurementSession, _measure_or_resume, _stability_details
+from formic.science.identity.campaign import (
+    _MeasurementSession,
+    _adjudicate_snapshot_candidate,
+    _measure_or_resume,
+    _phase_snapshot_restore,
+    _stability_details,
+)
 from formic.science.identity.protocol import InvalidMeasurement
 from formic.science.identity.types import SamplingMode
 
 
 def _identity() -> CampaignIdentity:
     return CampaignIdentity(
-        protocol="SPEC-02-h8-option-b",
+        protocol="SPEC-02-h8-option-b-balanced-v2",
         config_sha256="a" * 64,
         corpus_sha256="b" * 64,
         git_commit="c" * 40,
@@ -118,3 +124,50 @@ def test_trace_inertness_warmup_disables_autograd():
     session.trace_off_prefill(SimpleNamespace(token_ids=(1, 2, 3)))
 
     assert model.grad_enabled == [False]
+
+
+def test_snapshot_phase_resume_returns_the_committed_payload(tmp_path):
+    writer = IncrementalCampaignWriter(tmp_path / "run", _identity())
+    payload = {"schema_version": 1, "observations": [], "stability": {}}
+    writer.write_case("snapshot_restore__audit_echo", payload)
+    writer.write_phase(
+        "snapshot_restore",
+        {"schema_version": 1, "forwards": 48, "cases": [payload]},
+    )
+
+    resumed = _phase_snapshot_restore(writer, object(), object())
+
+    assert resumed == payload
+
+
+def test_snapshot_candidate_adjudication_uses_measured_short_cached_threshold():
+    snapshot = {
+        "observations": [
+            {
+                "repetition": 0,
+                "comparisons": [
+                    {
+                        "tensor": {"max_abs_delta": 0.25},
+                        "top1_agreement": True,
+                    }
+                ],
+            }
+        ],
+        "stability": {"last_two_exact": True},
+    }
+    candidate = {
+        "records": [
+            {
+                "mode": "decode_cached",
+                "point": "logits",
+                "length_class": "short",
+                "max_abs_delta": 0.5,
+            }
+        ]
+    }
+
+    result = _adjudicate_snapshot_candidate(snapshot, candidate)
+
+    assert result["verdict"] == "CANDIDATE_PASS"
+    candidate["records"][0]["max_abs_delta"] = 0.125
+    assert _adjudicate_snapshot_candidate(snapshot, candidate)["verdict"] == "FAIL"

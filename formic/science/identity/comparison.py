@@ -51,6 +51,8 @@ def compare_forward_traces(
     mode: ExecutionMode,
     length_class: str,
     input_shape: InputShape,
+    allow_cache_applicability_mismatch: bool = False,
+    align_reference_hidden_tail: bool = False,
 ) -> TraceComparison:
     measurements: list[MeasuredComparison] = []
     not_applicable: list[ComparisonLocation] = []
@@ -68,12 +70,35 @@ def compare_forward_traces(
             raise TraceStructureError(
                 f"boundary order differs: {ref_boundary.name} != {cand_boundary.name}"
             )
+        reference_hidden = ref_boundary.hidden_states
+        if (
+            align_reference_hidden_tail
+            and reference_hidden.shape != cand_boundary.hidden_states.shape
+            and reference_hidden.ndim == cand_boundary.hidden_states.ndim == 3
+            and reference_hidden.shape[0] == cand_boundary.hidden_states.shape[0]
+            and reference_hidden.shape[2] == cand_boundary.hidden_states.shape[2]
+            and reference_hidden.shape[1] >= cand_boundary.hidden_states.shape[1]
+        ):
+            reference_hidden = reference_hidden[
+                :, -cand_boundary.hidden_states.shape[1] :, :
+            ]
         add(
             ComparisonLocation(ComparisonPoint.HIDDEN_STATE, ref_boundary.name),
-            compare_tensors(ref_boundary.hidden_states, cand_boundary.hidden_states),
+            compare_tensors(reference_hidden, cand_boundary.hidden_states),
         )
         if ref_boundary.cache_applicability != cand_boundary.cache_applicability:
-            raise TraceStructureError(f"cache applicability differs at {ref_boundary.name}")
+            if not allow_cache_applicability_mismatch:
+                raise TraceStructureError(
+                    f"cache applicability differs at {ref_boundary.name}"
+                )
+            if ref_boundary.completed_group is not None:
+                not_applicable.extend(
+                    (
+                        ComparisonLocation(ComparisonPoint.GDN_STATE, ref_boundary.name),
+                        ComparisonLocation(ComparisonPoint.ATTENTION_KV, ref_boundary.name),
+                    )
+                )
+            continue
         if ref_boundary.cache_applicability == "not_applicable":
             if ref_boundary.completed_group is not None:
                 not_applicable.extend(

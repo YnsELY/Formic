@@ -18,6 +18,7 @@ def build_candidate_tolerances(
     observations: Iterable[dict[str, Any]],
     *,
     raw_measurements_sha256: str,
+    reference_floor_observations: Iterable[dict[str, Any]],
 ) -> dict[str, Any]:
     """Build a non-governing tolerance candidate from measured observations.
 
@@ -25,6 +26,14 @@ def build_candidate_tolerances(
     ``REVIEW_REQUIRED``: the campaign records numbers but never assigns a
     causal explanation in the pod session.
     """
+    floors = list(reference_floor_observations)
+    floor_repetitions = {int(item["repetition"]) for item in floors}
+    if len(floor_repetitions) < 3:
+        raise CalibrationError("reference floor lacks three measured repetitions")
+    if any(item.get("point") != "logits" for item in floors):
+        raise CalibrationError("economical reference floor must be logits-only")
+    logits_reference_floor = max(float(item["max_abs_delta"]) for item in floors)
+
     grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for observation in observations:
         length_class = observation["length_class"]
@@ -55,17 +64,29 @@ def build_candidate_tolerances(
         if len(repetitions) < 3:
             raise CalibrationError(f"{key} lacks three measured repetitions")
         observed_max = max(float(item["max_abs_delta"]) for item in items)
-        exact = observed_max == 0.0 and all(item["top1_agreement"] is not False for item in items)
+        reference_floor = logits_reference_floor if point == "logits" else 0.0
+        for item in items:
+            item["reference_floor"] = reference_floor
+        exact = (
+            observed_max == 0.0
+            and reference_floor == 0.0
+            and all(item["top1_agreement"] is not False for item in items)
+        )
         records.append(
             {
                 "mode": mode,
                 "point": point,
                 "length_class": length_class,
                 "criterion": "exact" if exact else "bounded",
-                "max_abs_delta": 0.0 if exact else 2.0 * observed_max,
+                "max_abs_delta": (
+                    0.0
+                    if exact
+                    else max(2.0 * observed_max, reference_floor)
+                ),
                 "physical_justification": None if exact else "REVIEW_REQUIRED",
                 "observations": items,
                 "observed_max_abs_delta": observed_max,
+                "reference_floor_max_abs_delta": reference_floor,
             }
         )
     return {
