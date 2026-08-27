@@ -44,7 +44,7 @@ def test_estimate_reports_one_load_and_all_phase_durations(tmp_path):
     assert report.model_load_seconds == 100.0
     assert report.remaining_estimated_seconds == 900.0
     assert report.total_estimated_seconds == 1_000.0
-    assert report.total_forwards == 9_669
+    assert report.total_forwards == 9_925
     assert [phase.name for phase in report.phases] == list(EXPECTED_PHASE_FORWARDS)
 
 

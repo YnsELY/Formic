@@ -200,8 +200,13 @@ def run_gpu_campaign(
             sampled_continuation_seed,
         )
         release_cuda_working_set()
-        _phase_probe64(writer, session, corpus, continuations, sampled_continuation_seed)
-        release_cuda_working_set()
+        # Derived artefacts (raw measurements, candidate tolerances, snapshot
+        # adjudication, candidate verdict) are pure derivations of already
+        # collected data, so they are written as soon as their inputs exist.
+        # A later failure — the 64-frame probe or a failing final gate — can
+        # then never erase collected evidence: every phase still runs, and
+        # the blocking decision is taken once at the end (decision: measure
+        # everything, then judge).
         raw_path = root / "calibration" / "raw_measurements.json"
         atomic_write_json(raw_path, {"schema_version": 1, "observations": calibration})
         raw_digest = sha256_bytes(raw_path.read_bytes())
@@ -221,8 +226,6 @@ def run_gpu_campaign(
             root / "snapshot_restore" / "adjudication.candidate.json",
             snapshot_adjudication,
         )
-        if snapshot_adjudication["verdict"] != "CANDIDATE_PASS":
-            raise CampaignError("snapshot/restore candidate adjudication failed")
         verdict = candidate_verdict(calibration)
         verdict.update(
             {
@@ -238,7 +241,9 @@ def run_gpu_campaign(
             }
         )
         atomic_write_json(root / "verdict.candidate.json", verdict)
-        _require_candidate_pass(verdict)
+        _phase_probe64(writer, session, corpus, continuations, sampled_continuation_seed)
+        release_cuda_working_set()
+        _assert_final_gates(snapshot_adjudication, verdict)
         atomic_write_json(
             root / "terminal.json",
             {
@@ -683,7 +688,11 @@ def _phase_probe64(
                 session,
                 path,
                 forced_token_ids=forced,
-                repetitions=session.config.identity.exact_gate_repetitions,
+                # Three measured repetitions like every other measurement, so
+                # the blocking last-two assertion compares repetitions 1 and 2
+                # and the observed two-trace transient window stays covered by
+                # burn-in plus repetition 0.
+                repetitions=session.config.identity.measurement_repetitions,
                 sampling=SamplingMode.GREEDY,
                 continuation_seed=None,
                 exact_required=False,
@@ -1582,9 +1591,19 @@ def _serialise_comparison(comparison: TraceComparison, *, logits_only: bool) -> 
 def _assert_stable(fingerprints: list[tuple[str, str]], case_id: str) -> None:
     if len(fingerprints) < 2 or fingerprints[-1] != fingerprints[-2]:
         details = _stability_details(fingerprints)
+        changed_side = "insufficient_repetitions"
+        if len(fingerprints) >= 2:
+            previous, latest = fingerprints[-2], fingerprints[-1]
+            sides = [
+                name
+                for name, index in (("reference", 0), ("candidate", 1))
+                if previous[index] != latest[index]
+            ]
+            changed_side = "+".join(sides) or "none"
         raise InvalidMeasurement(
             f"last two measured traces are unstable: {case_id}; "
-            f"first_changed_repetition={details['first_changed_repetition']}"
+            f"first_changed_repetition={details['first_changed_repetition']}; "
+            f"changed_side={changed_side}"
         )
 
 
@@ -1639,6 +1658,30 @@ def _require_candidate_pass(verdict: dict[str, Any]) -> None:
             "candidate verdict is "
             f"{verdict.get('verdict')!r} ({verdict.get('reason')}); "
             "the campaign terminates as FAIL"
+        )
+
+
+def _assert_final_gates(
+    snapshot_adjudication: dict[str, Any], verdict: dict[str, Any]
+) -> None:
+    """Raise once, listing every failing final gate.
+
+    Both artefacts are already on disk when this runs; grouping the checks
+    means a failing adjudication can no longer suppress the candidate verdict
+    (or vice versa) and the terminal FAIL names everything that failed.
+    """
+    failures: list[str] = []
+    if snapshot_adjudication.get("verdict") != "CANDIDATE_PASS":
+        failures.append("snapshot/restore candidate adjudication failed")
+    if verdict.get("verdict") != "CANDIDATE_PASS":
+        failures.append(
+            f"candidate verdict is {verdict.get('verdict')!r}"
+            f" ({verdict.get('reason')})"
+        )
+    if failures:
+        raise CampaignError(
+            "; ".join(failures)
+            + " — all measured artefacts were written before this failure"
         )
 
 

@@ -65,8 +65,8 @@ class CampaignPlan:
             raise ValueError("SPEC-02 campaign forward budget changed")
         if len(self.preflight_paths) != 18:
             raise ValueError("preflight must contain 18 timed paths")
-        if self.total_forwards != 9_669:
-            raise ValueError(f"campaign forwards {self.total_forwards} != 9669")
+        if self.total_forwards != 9_925:
+            raise ValueError(f"campaign forwards {self.total_forwards} != 9925")
 
 
 def build_campaign_plan(config: RunConfig, corpus: FrozenPromptCorpus) -> CampaignPlan:

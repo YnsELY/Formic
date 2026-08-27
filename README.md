@@ -409,7 +409,7 @@ checkpoint mounted at `/workspace/Qwen3.8-27B` and one visible NVIDIA A40
 (operating procedure: [`docs/runbooks/step2_pod_campaign.md`](docs/runbooks/step2_pod_campaign.md)).
 It loads the model exactly once, runs the preflight first, displays the
 measured estimate, and then continues automatically. The current audited v3
-plan contains 9,669 forwards; the historical short-shape projection is 8.27
+plan contains 9,925 forwards; the historical short-shape projection is 8.49
 hours, while the measured post-preflight estimate is authoritative for the
 current pod:
 

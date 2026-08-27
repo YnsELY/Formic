@@ -378,12 +378,12 @@ def _phase_costs(main_totals: tuple[int, int, int]) -> list[tuple[str, Cost, str
     )
 
     # The already proposed 64-step accumulation probe (short + medium):
-    # 6+6 warm traces, one burn-in pair and two measured pairs per prompt.
+    # 6+6 warm traces, one burn-in pair and three measured pairs per prompt.
     accumulation_prompts = (PROMPTS[0], PROMPTS[2])
     accumulation = Cost(
-        forwards=len(accumulation_prompts) * 18 * 64,
-        input_tokens=sum(18 * (prompt.tokens + 63) for prompt in accumulation_prompts),
-        transfer_bytes=len(accumulation_prompts) * 6 * 64 * LOGITS_BYTES,
+        forwards=len(accumulation_prompts) * 20 * 64,
+        input_tokens=sum(20 * (prompt.tokens + 63) for prompt in accumulation_prompts),
+        transfer_bytes=len(accumulation_prompts) * 8 * 64 * LOGITS_BYTES,
         shapes="cached vs recompute, 64 étapes, logits seulement",
     )
     preflight = Cost(

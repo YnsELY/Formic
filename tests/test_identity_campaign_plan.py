@@ -8,17 +8,17 @@ from formic.science.identity.prompts import load_frozen_corpus
 from formic.science.identity.types import ExecutionMode
 
 
-def test_final_a40_plan_is_pinned_to_the_balanced_9669_forward_protocol():
+def test_final_a40_plan_is_pinned_to_the_balanced_9925_forward_protocol():
     config = load_config("configs/default.yaml")
     corpus = load_frozen_corpus("configs/reference_prompts.yaml")
     plan = build_campaign_plan(config, corpus)
 
     assert len(plan.preflight_paths) == 18
-    assert plan.total_forwards == 9_669
+    assert plan.total_forwards == 9_925
     assert plan.phase_forwards["trace_inertness"] == 144
     assert plan.phase_forwards["legacy_continuity"] == 3_872
     assert plan.phase_forwards["noise_floor"] == 752
-    assert plan.phase_forwards["accumulation_probe_64"] == 2_304
+    assert plan.phase_forwards["accumulation_probe_64"] == 2_560
     assert all(
         item.mode is not ExecutionMode.DECODE_RECOMPUTE or item.prompt.length_class != "long"
         for item in plan.calibration_paths

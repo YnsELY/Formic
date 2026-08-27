@@ -46,5 +46,5 @@ def test_final_session_includes_balanced_legacy_and_cross_path_probe():
     assert by_name["Snapshot/restore réel"].forwards == 64
     assert by_name["Continuité legacy"].forwards == 3_872
     assert by_name["Plancher de bruit"].forwards == 752
-    assert by_name["Sonde accumulation 64"].forwards == 2_304
-    assert total.forwards == 9_669
+    assert by_name["Sonde accumulation 64"].forwards == 2_560
+    assert total.forwards == 9_925

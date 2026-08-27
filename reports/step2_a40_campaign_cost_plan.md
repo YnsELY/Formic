@@ -74,8 +74,15 @@ l'évidence admise par cas est inchangée par rapport au plan v2.
 | 7 | Classe courte | 808 | 18,93 GiB | 0,69 h | `E_short` |
 | 8 | Classe moyenne | 808 | 35,23 GiB | 0,69 h | `E_medium` |
 | 9 | Classe longue | 488 | 18,87 GiB | 0,42 h | `E_long` |
-| 10 | Sonde cached/recalcul 64, court + moyen | 2 304 | 0,36 GiB | 1,97 h | `E_probe64` |
-| | **Total** | **9 669** | **84,24 GiB** | **8,27 h non calibrées** | `T_preflight + ΣE` |
+| 10 | Sonde cached/recalcul 64, court + moyen | 2 560 | 0,47 GiB | 2,19 h | `E_probe64` |
+| | **Total** | **9 925** | **84,36 GiB** | **8,49 h non calibrées** | `T_preflight + ΣE` |
+
+La sonde 64 tourne à trois répétitions mesurées comme toutes les autres
+mesures (burn-in + rép 0 couvrent la fenêtre transitoire de deux traces ;
+l'assertion last-two compare les répétitions 1 et 2). Les artefacts dérivés
+(mesures brutes, tolérances candidates, adjudication snapshot, verdict
+candidat) sont écrits dès que leurs données existent, avant la sonde ; les
+gates finales sont jugées ensemble en fin de session.
 
 Le preflight couvre les chemins candidats et leurs références canoniques
 distinctes, capture désactivée :

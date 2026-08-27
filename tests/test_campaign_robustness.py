@@ -19,10 +19,13 @@ from formic.science.identity.artifacts import (
 from formic.science.identity.campaign import (
     CampaignError,
     _adjudicate_snapshot_candidate,
+    _assert_final_gates,
+    _assert_stable,
     _phase_continuations,
     _reference_floor_maximum,
     _require_candidate_pass,
 )
+from formic.science.identity.protocol import InvalidMeasurement
 from formic.science.identity.crossover_diagnostic import (
     AttemptMemoryWriter,
     assert_resumable_terminal,
@@ -46,6 +49,36 @@ def test_require_candidate_pass_raises_on_hard_failure():
         _require_candidate_pass({"verdict": "FAIL", "reason": "top1_agreement"})
     with pytest.raises(CampaignError):
         _require_candidate_pass({})
+
+
+def test_final_gates_report_every_failure_together():
+    passing = {"verdict": "CANDIDATE_PASS"}
+    _assert_final_gates(passing, {"verdict": "CANDIDATE_PASS", "reason": "ok"})
+
+    with pytest.raises(CampaignError) as excinfo:
+        _assert_final_gates(
+            {"verdict": "FAIL"},
+            {"verdict": "FAIL", "reason": "top1_agreement"},
+        )
+    message = str(excinfo.value)
+    assert "snapshot/restore candidate adjudication failed" in message
+    assert "top1_agreement" in message
+    assert "written before this failure" in message
+
+    with pytest.raises(CampaignError, match="adjudication failed"):
+        _assert_final_gates({"verdict": "FAIL"}, {"verdict": "CANDIDATE_PASS"})
+    with pytest.raises(CampaignError, match="candidate verdict"):
+        _assert_final_gates(passing, {"verdict": "FAIL", "reason": "top1_agreement"})
+
+
+def test_assert_stable_names_the_changed_side():
+    with pytest.raises(InvalidMeasurement, match="changed_side=candidate"):
+        _assert_stable([("ref", "cand-a"), ("ref", "cand-b")], "case")
+    with pytest.raises(InvalidMeasurement, match="changed_side=reference\\+candidate"):
+        _assert_stable([("ref-a", "cand-a"), ("ref-b", "cand-b")], "case")
+    with pytest.raises(InvalidMeasurement, match="insufficient_repetitions"):
+        _assert_stable([("ref", "cand")], "case")
+    _assert_stable([("ref", "cand"), ("ref", "cand")], "case")
 
 
 def test_campaign_terminal_guard_refuses_completed_run(tmp_path):

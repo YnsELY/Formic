@@ -188,14 +188,24 @@ backbone against committed hash
 `74e1813c29b065406f4b772ed7c9059b8455428bff9aa6e572645cf09743c662`
 before the first identity measurement.
 
-The revised v3 plan contains 9,669 model forwards: 333 preflight, 144 trace
+The revised v3 plan contains 9,925 model forwards: 333 preflight, 144 trace
 inertness, 3,872 legacy crossover, 752 noise floor, 64 snapshot/restore, 96
-reference continuation generation, 2,104 main calibration and 2,304 for the
-64-frame cached-versus-recompute probe. Relative to the v2 plan (8,549), the
-increase is entirely warmup coverage and measured-then-discarded burn-in; the
-admitted evidence per case is unchanged. The historical short-shape
-sensitivity projection is 8.27 hours; the real post-preflight estimate
-supersedes it and remains informational.
+reference continuation generation, 2,104 main calibration and 2,560 for the
+64-frame cached-versus-recompute probe. The probe runs three measured
+repetitions like every other measurement, so its blocking last-two assertion
+compares repetitions 1 and 2 and the observed two-trace transient window
+stays covered by burn-in plus repetition 0. Relative to the v2 plan (8,549),
+the increase is entirely warmup coverage, measured-then-discarded burn-in and
+the probe's third repetition; the admitted evidence per case is otherwise
+unchanged. The historical short-shape sensitivity projection is 8.49 hours;
+the real post-preflight estimate supersedes it and remains informational.
+
+Derived artefacts — raw measurements, candidate tolerances, snapshot
+adjudication and candidate verdict — are written as soon as their inputs
+exist, before the 64-frame probe runs; the blocking decision on the final
+gates is taken once, at the end, listing every failure. A late-phase failure
+can therefore never erase collected evidence, and a failing adjudication can
+no longer suppress the candidate verdict or vice versa.
 
 No numerical tolerance is proposed in this ADR. `tolerances.json` will be
 created only by the final A40 calibration campaign.

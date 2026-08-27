@@ -30,7 +30,7 @@ _PHASE_TRANSFER_GIB = {
     "short": 18.93,
     "medium": 35.23,
     "long": 18.87,
-    "accumulation_probe_64": 0.36,
+    "accumulation_probe_64": 0.47,
 }
 
 
@@ -368,12 +368,14 @@ def _estimate_from_timings(
             length_class,
             prefill_paths + decode_paths,
         )
+    # Per side and per prompt: 6 warmup + 1 burn-in + 3 measured traces of 64
+    # frames each = 640 frame-units.
     phase_seconds["accumulation_probe_64"] = with_transfer(
         "accumulation_probe_64",
-        576 * (path_time("short", "decode_cached") / 8)
-        + 576 * (reference_time("short", "decode_cached") / 8)
-        + 576 * (path_time("medium", "decode_cached") / 8)
-        + 576 * (reference_time("medium", "decode_cached") / 8),
+        640 * (path_time("short", "decode_cached") / 8)
+        + 640 * (reference_time("short", "decode_cached") / 8)
+        + 640 * (path_time("medium", "decode_cached") / 8)
+        + 640 * (reference_time("medium", "decode_cached") / 8),
     )
     phases = tuple(
         PhaseEstimate(name, EXPECTED_PHASE_FORWARDS[name], phase_seconds[name])

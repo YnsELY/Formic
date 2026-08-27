@@ -11,9 +11,10 @@ from typing import Any
 PROTOCOL_ID = "SPEC-02-h8-option-b-balanced-v3"
 PREFLIGHT_FORWARDS = 333
 # v3 adds measured-then-discarded burn-in after every non-empty warmup block
-# (4 pair traces for the paired gates, 1 repetition for cross-path cases) and
+# (4 pair traces for the paired gates, 1 repetition for cross-path cases),
 # per-endpoint warmups (the runner is now warmed for prefill_full,
-# decode_recompute and long cached decode).  See ADR-0005 and
+# decode_recompute and long cached decode), and three measured repetitions for
+# the 64-frame probe like every other measurement.  See ADR-0005 and
 # scripts/estimate_step2_campaign.py for the per-phase derivation.
 EXPECTED_PHASE_FORWARDS = {
     "trace_inertness": 144,
@@ -24,7 +25,7 @@ EXPECTED_PHASE_FORWARDS = {
     "short": 808,
     "medium": 808,
     "long": 488,
-    "accumulation_probe_64": 2_304,
+    "accumulation_probe_64": 2_560,
 }
 
 

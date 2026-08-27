@@ -26,6 +26,8 @@ git status          # DOIT être propre : le lanceur refuse un worktree sale
 git pull
 git rev-parse HEAD  # DOIT être le commit annoncé par Yanis pour cette session
 python -c "import torch, transformers; print(torch.__version__, transformers.__version__)"
+df -h /workspace    # >= 10 Go libres (artefacts + JSON de mesures)
+nvidia-smi          # une seule A40, 0 MiB utilisé, aucun processus
 ```
 
 ## 3. Lancement
@@ -40,9 +42,13 @@ python scripts/step2_a40_campaign.py \
   changer : toute autre valeur change le hash de config résolue et invalide
   la reprise.
 - Le run est entièrement automatique : preflight (~20 min, estimation
-  affichée), puis enchaînement sans gate budgétaire. Plan v3 : **9 669
-  forwards**, ~8,3 h en équivalent historique — l'estimation post-preflight
+  affichée), puis enchaînement sans gate budgétaire. Plan v3 : **9 925
+  forwards**, ~8,5 h en équivalent historique — l'estimation post-preflight
   fait foi.
+- Les artefacts dérivés (mesures brutes, tolérances candidates, adjudication,
+  verdict candidat) sont écrits avant la sonde 64 ; les gates finales sont
+  jugées ensemble en fin de session. Un `FAIL` terminal peut donc être un
+  résultat complet et informatif : rapporte et pousse tout dans tous les cas.
 - Le lanceur n'arrête jamais le pod et ne demande pas de l'arrêter.
 
 ## 4. Reprise après un FAIL
@@ -55,7 +61,10 @@ python scripts/step2_a40_campaign.py \
 Conditions strictes : même commit, même config, même corpus, même backbone —
 tout écart est refusé (`resume identity differs`). Un run terminé
 `CALIBRATION_COMPLETE` refuse la reprise. Après un changement de code ou de
-protocole : **nouveau run-id**, jamais `--resume`.
+protocole : **nouveau run-id**, jamais `--resume`. La reprise est PRÉVUE pour
+les interruptions d'infrastructure (coupure réseau/pod, kill) sans changement
+de code : les cas déjà commités sont réutilisés, seules les chauffes et les
+burn-ins du travail restant sont refaits.
 
 ## 5. Fin de session — à rapporter
 

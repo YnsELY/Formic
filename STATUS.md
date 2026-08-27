@@ -34,9 +34,13 @@ off. Nothing downstream starts before that (plan rule 1).
 > cross-position comparisons downstream (cross-path calibration, snapshot
 > adjudication) may therefore fail the hard top-1 verdict; the explicit
 > decision is to rerun and measure everything before amending any criterion.
-> The 9,669-forward v3 calibration remains to be rerun (runbook:
-> `docs/runbooks/step2_pod_campaign.md`); no tolerance or official SPEC-02
-> PASS exists yet.
+> Hardening for that decision: derived artefacts (raw measurements, candidate
+> tolerances, adjudication, verdict) are written before the 64-frame probe
+> and the final gates are judged together at the end, so a late failure can
+> never erase collected evidence; the probe now runs three measured
+> repetitions like every other measurement. The 9,925-forward v3 calibration
+> remains to be rerun (runbook: `docs/runbooks/step2_pod_campaign.md`); no
+> tolerance or official SPEC-02 PASS exists yet.
 
 Reference documents, in order of authority: the checkpoint audit
 (`/workspace/audits/qwen3_8_27b/`) → `FINAL_TARGET_ARCHITECTURE.md` (CAPE-R) →
