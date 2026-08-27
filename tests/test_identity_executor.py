@@ -153,6 +153,52 @@ def test_cross_path_cached_decode_uses_recompute_reference_and_cpu_evidence():
     } == {"gdn_state", "attention_kv"}
 
 
+def test_cross_path_logits_only_override_captures_no_boundary_state():
+    """The 64-frame probe is logits-only end to end, not just at serialisation."""
+    reference_model = toy_model(seed=45)
+    candidate_model = toy_model(seed=45)
+    reference = Endpoint(
+        "reference",
+        reference_model,
+        HybridGroupView.from_text_config(reference_model.config),
+        False,
+    )
+    candidate = Endpoint(
+        "runner",
+        candidate_model,
+        HybridGroupView.from_text_config(candidate_model.config),
+        True,
+    )
+    from formic.science.identity.types import CaptureProfile
+
+    result = run_cross_path_pair(
+        reference,
+        candidate,
+        prompt_token_ids=(1, 2, 3, 4),
+        candidate_mode=ExecutionMode.DECODE_CACHED,
+        length_class="short",
+        forced_token_ids=(5, 6, 7),
+        capture=True,
+        capture_profile=CaptureProfile.LOGITS_ONLY,
+    )
+
+    assert isinstance(result.payload, AlignedCasePayload)
+    points = {
+        item.location.point.value
+        for comparison in result.payload.comparisons
+        for item in comparison.measurements
+    }
+    assert points == {"logits"}
+    for path in (result.payload.reference, result.payload.candidate):
+        for frame in path.frames:
+            assert frame.trace.boundaries == ()
+            assert frame.trace.final_state is None
+    # One retained tensor per frame (the logits), nothing else.
+    assert result.captured_state_tensors == len(
+        result.payload.reference.frames
+    ) + len(result.payload.candidate.frames)
+
+
 def test_reference_shapes_for_segmented_prefill_are_full_prefixes():
     assert [
         shape.key

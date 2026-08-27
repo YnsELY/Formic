@@ -39,6 +39,7 @@ def main() -> int:
 
     from formic.config.loader import load_config
     from formic.science.determinism import (
+        configure_determinism,
         environment_report,
         git_commit,
         prepare_backend_environment,
@@ -59,6 +60,11 @@ def main() -> int:
     prepare_backend_environment(config.numerics)
 
     import torch
+
+    # Apply the pinned numerical policy immediately so the recorded
+    # environment report reflects the flags the measurement actually uses
+    # (previously the report was written before load_backbone applied them).
+    configure_determinism(config.run.seed, config.run.deterministic, config.numerics)
 
     from formic.backbone.loader import load_backbone
     from formic.science.identity.artifacts import atomic_write_json

@@ -63,6 +63,12 @@ def main() -> int:
         print(f"  {type(exc).__name__}: {exc}")
         return 1
     print(f"IDENTITY CHECK: {result.message}")
+    verdict = (result.candidate_verdict or {}).get("verdict")
+    if result.completed and verdict not in (None, "CANDIDATE_PASS"):
+        # Defence in depth: the campaign itself raises on a hard FAIL, but a
+        # completed run must never exit 0 with a failing candidate verdict.
+        print(f"IDENTITY CHECK: candidate verdict {verdict} — treating as FAIL")
+        return 1
     return 0 if result.completed else 1
 
 

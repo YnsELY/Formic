@@ -137,6 +137,7 @@ def execute_path(
     segmentation: str | None = None,
     forced_token_ids: tuple[int, ...] = (),
     capture: bool,
+    capture_profile: CaptureProfile | None = None,
 ) -> PathTrace | None:
     if length_class == "long" and mode is ExecutionMode.DECODE_RECOMPUTE:
         raise ValueError("full-recomputation decode is disabled for long prompts")
@@ -193,7 +194,13 @@ def execute_path(
         cached_before = int(active_cache.get_seq_length()) if active_cache is not None else 0
         shape = InputShape(1, int(input_ids.shape[-1]), cached_before)
         is_final = ordinal == len(specs) - 1
-        profile = _capture_profile(length_class, is_final)
+        # An explicit override (e.g. the logits-only 64-frame probe) applies to
+        # every frame; ``None`` keeps the pinned per-class capture rule.
+        profile = (
+            capture_profile
+            if capture_profile is not None
+            else _capture_profile(length_class, is_final)
+        )
         trace = _forward(
             endpoint,
             input_ids=input_ids,
@@ -219,6 +226,7 @@ def execute_reference_for_candidate(
     segmentation: str | None = None,
     forced_token_ids: tuple[int, ...] = (),
     capture: bool,
+    capture_profile: CaptureProfile | None = None,
 ) -> PathTrace | None:
     """Execute the canonical stock reference for a candidate execution path.
 
@@ -238,6 +246,7 @@ def execute_reference_for_candidate(
                 mode=ExecutionMode.PREFILL_FULL,
                 length_class=length_class,
                 capture=capture,
+                capture_profile=capture_profile,
             )
             if capture:
                 assert trace is not None and len(trace.frames) == 1
@@ -258,6 +267,7 @@ def execute_reference_for_candidate(
         segmentation=segmentation,
         forced_token_ids=forced_token_ids,
         capture=capture,
+        capture_profile=capture_profile,
     )
 
 
@@ -289,6 +299,7 @@ def run_cross_path_pair(
     segmentation: str | None = None,
     forced_token_ids: tuple[int, ...] = (),
     capture: bool,
+    capture_profile: CaptureProfile | None = None,
 ) -> PairTrace:
     """Compare a Formic path with its canonical stock numerical reference.
 
@@ -304,6 +315,7 @@ def run_cross_path_pair(
         segmentation=segmentation,
         forced_token_ids=forced_token_ids,
         capture=capture,
+        capture_profile=capture_profile,
     )
     if capture:
         assert reference_trace is not None
@@ -316,6 +328,7 @@ def run_cross_path_pair(
         segmentation=segmentation,
         forced_token_ids=forced_token_ids,
         capture=capture,
+        capture_profile=capture_profile,
     )
     if not capture:
         return PairTrace("", "", None, 0)
@@ -357,6 +370,7 @@ def run_aligned_pair(
     segmentation: str | None = None,
     forced_token_ids: tuple[int, ...] = (),
     capture: bool,
+    capture_profile: CaptureProfile | None = None,
 ) -> PairTrace:
     ref_trace = execute_path(
         reference,
@@ -366,6 +380,7 @@ def run_aligned_pair(
         segmentation=segmentation,
         forced_token_ids=forced_token_ids,
         capture=capture,
+        capture_profile=capture_profile,
     )
     cand_trace = execute_path(
         candidate,
@@ -375,6 +390,7 @@ def run_aligned_pair(
         segmentation=segmentation,
         forced_token_ids=forced_token_ids,
         capture=capture,
+        capture_profile=capture_profile,
     )
     if not capture:
         return PairTrace("", "", None, 0)

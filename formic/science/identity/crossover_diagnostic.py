@@ -356,6 +356,29 @@ class AttemptMemoryWriter:
         )
         return measurement
 
+    def write_live_summary(self, model: Any) -> None:
+        """Append this attempt's live-tensor summary without erasing prior ones."""
+        from formic.science.identity.memory import live_cuda_tensor_summary
+
+        target = self.path.with_name("live_tensors.json")
+        attempts: dict[str, Any] = {}
+        if target.exists():
+            try:
+                existing = json.loads(target.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                raise ArtifactError("existing live tensor evidence is invalid") from exc
+            if isinstance(existing, dict) and set(existing) == {"schema_version", "attempts"}:
+                if not isinstance(existing["attempts"], dict):
+                    raise ArtifactError("existing live tensor attempts are invalid")
+                attempts = existing["attempts"]
+            elif isinstance(existing, dict):
+                # A pre-attempt summary written by the incremental writer.
+                attempts = {"attempt_000_legacy": existing}
+            else:
+                raise ArtifactError("existing live tensor evidence has invalid schema")
+        attempts[self.attempt_id] = live_cuda_tensor_summary(model)
+        atomic_write_json(target, {"schema_version": 1, "attempts": attempts})
+
 
 def prepare_attempt_metadata(
     path: str | Path,
@@ -391,7 +414,13 @@ def prepare_attempt_metadata(
     return result, attempt_id
 
 
-def assert_resumable_terminal(path: str | Path) -> None:
+def assert_resumable_terminal(
+    path: str | Path,
+    *,
+    complete_statuses: tuple[str, ...] = ("COMPLETE",),
+    resumable_statuses: tuple[str, ...] = ("FAIL", "BLOCKED"),
+    kind: str = "crossover diagnostic",
+) -> None:
     """Refuse resume after successful completion; allow absent or failed attempts."""
     target = Path(path)
     if not target.exists():
@@ -399,12 +428,14 @@ def assert_resumable_terminal(path: str | Path) -> None:
     try:
         value = json.loads(target.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise ArtifactError("existing crossover terminal artifact is invalid") from exc
+        raise ArtifactError(f"existing {kind} terminal artifact is invalid") from exc
     status = value.get("status") if isinstance(value, dict) else None
-    if status == "COMPLETE":
-        raise ArtifactError("refusing to resume an already COMPLETE crossover diagnostic")
-    if status not in ("FAIL", "BLOCKED"):
-        raise ArtifactError(f"existing crossover terminal status is not resumable: {status!r}")
+    if status in complete_statuses:
+        raise ArtifactError(f"refusing to resume an already {status} {kind}")
+    if status not in resumable_statuses:
+        raise ArtifactError(
+            f"existing {kind} terminal status is not resumable: {status!r}"
+        )
 
 
 class CPULogitBank:

@@ -46,6 +46,11 @@ from formic.science.identity.calibration import (
 from formic.science.identity.campaign_plan import CampaignPath, CampaignPlan, build_campaign_plan, timing_continuation
 from formic.science.identity.comparison import TraceComparison
 from formic.science.identity.continuation import generate_forced_continuation
+from formic.science.identity.crossover_diagnostic import (
+    AttemptMemoryWriter,
+    assert_resumable_terminal,
+    prepare_attempt_metadata,
+)
 from formic.science.identity.executor import (
     AlignedCasePayload,
     Endpoint,
@@ -118,44 +123,57 @@ def run_gpu_campaign(
     corpus = load_frozen_corpus(_repo_path(config.identity.prompt_set_path))
     plan = build_campaign_plan(config, corpus)
     started_at = _now()
-    memory = IncrementalMemoryWriter(root / "memory" / "cuda_memory.json")
-    memory.record("before_load")
-
-    # Exactly one invocation of the production loader occurs in this function.
-    handle = loader(config)
+    handle: BackboneHandle | None = None
+    memory: AttemptMemoryWriter | None = None
     try:
-        memory.record("after_load", handle.model)
-        corpus.validate_tokenizer(handle.tokenizer)
-        backbone = canonical_backbone_hash(handle.inventory)
+        # The committed audited hash pins the campaign identity before any
+        # weight is touched; the loaded checkpoint is verified against it
+        # immediately after the single load below.
         expected_backbone = load_reusable_backbone_hash(
             _repo_path(config.identity.backbone_hash_path)
         )
-        if backbone != expected_backbone:
-            raise CampaignError(
-                "loaded backbone differs from the committed audited backbone hash"
-            )
         identity = CampaignIdentity(
             protocol="SPEC-02-h8-option-b-balanced-v2",
             config_sha256=config.config_hash(),
             corpus_sha256=corpus.corpus_sha256,
             git_commit=commit,
-            backbone_sha256=backbone.sha256,
+            backbone_sha256=expected_backbone.sha256,
         )
+        if resume:
+            assert_resumable_terminal(
+                root / "terminal.json",
+                complete_statuses=("CALIBRATION_COMPLETE",),
+                resumable_statuses=("FAIL",),
+                kind="campaign",
+            )
         writer = IncrementalCampaignWriter(root, identity)
         writer.validate()
-        _write_backbone_hash(root, backbone)
-        atomic_write_json(
+        _, attempt_id = prepare_attempt_metadata(
             root / "run_metadata.json",
-            {
+            base={
                 "schema_version": 1,
-                "started_at": started_at,
-                "resume": resume,
                 "identity": identity.__dict__,
-                "environment": environment_report(),
-                "backbone": backbone.to_dict(),
                 "sampled_continuation_seed": sampled_continuation_seed,
             },
+            attempt={
+                "started_at": started_at,
+                "resume": resume,
+                "environment": environment_report(),
+            },
         )
+        memory = AttemptMemoryWriter(root / "memory" / "cuda_memory.json", attempt_id)
+        memory.record("before_load")
+
+        # Exactly one invocation of the production loader occurs in this function.
+        handle = loader(config)
+        memory.record("after_load", handle.model)
+        corpus.validate_tokenizer(handle.tokenizer)
+        backbone = canonical_backbone_hash(handle.inventory)
+        if backbone != expected_backbone:
+            raise CampaignError(
+                "loaded backbone differs from the committed audited backbone hash"
+            )
+        _write_backbone_hash(root, backbone)
         session = _MeasurementSession(handle, config, memory=memory)
         session.plan = plan
         _phase_preflight(writer, root, handle, plan, memory=memory)
@@ -191,7 +209,9 @@ def run_gpu_campaign(
         candidate_path = root / "tolerances.candidate.json"
         atomic_write_json(candidate_path, candidate)
         snapshot_adjudication = _adjudicate_snapshot_candidate(
-            snapshot_evidence, candidate
+            snapshot_evidence,
+            candidate,
+            reference_floor_max_abs_delta=_reference_floor_maximum(noise_floor),
         )
         atomic_write_json(
             root / "snapshot_restore" / "adjudication.candidate.json",
@@ -214,6 +234,7 @@ def run_gpu_campaign(
             }
         )
         atomic_write_json(root / "verdict.candidate.json", verdict)
+        _require_candidate_pass(verdict)
         atomic_write_json(
             root / "terminal.json",
             {
@@ -235,8 +256,9 @@ def run_gpu_campaign(
         # diagnostic observation only; it does not keep the run alive or
         # alter the identity protocol.
         try:
-            memory.record("on_failure", handle.model)
-            memory.write_live_summary(handle.model)
+            if memory is not None and handle is not None:
+                memory.record("on_failure", handle.model)
+                memory.write_live_summary(handle.model)
         except Exception:
             pass
         _write_failure(root, exc)
@@ -254,7 +276,7 @@ def _phase_preflight(
     handle: BackboneHandle,
     plan: CampaignPlan,
     *,
-    memory: IncrementalMemoryWriter | None = None,
+    memory: IncrementalMemoryWriter | AttemptMemoryWriter | None = None,
 ) -> None:
     if "preflight" in writer.completed_phases():
         estimate = report_estimate(
@@ -448,31 +470,45 @@ def _phase_continuations(
             result[(item["prompt_id"], item["seed"])] = tuple(item["token_ids"])
         return result
     records: list[dict[str, Any]] = []
+    completed = writer.completed_cases()
     for prompt_id in session.config.identity.decode_prompt_ids:
         prompt = by_id[prompt_id]
-        greedy = session.greedy_continuation(prompt)
-        greedy_payload = {
-            "schema_version": 1,
-            "phase": phase,
-            "prompt_id": prompt.id,
-            "sampling": SamplingMode.GREEDY.value,
-            "seed": None,
-            "token_ids": list(greedy),
-        }
-        writer.write_case(f"continuation__{prompt.id}__greedy", greedy_payload)
-        records.append(greedy_payload)
-        result[(prompt.id, None)] = greedy
-        for seed in session.config.identity.continuation_seeds:
-            forced = session.sampled_continuation(prompt, seed)
-            payload = {
+        greedy_case = f"continuation__{prompt.id}__greedy"
+        if greedy_case in completed:
+            # A committed continuation is immutable evidence.  Regenerating it
+            # would re-spend forwards and could collide with the atomic writer
+            # if the regenerated realisation differed.
+            greedy_payload = _read_case(writer, greedy_case)
+            greedy = tuple(int(item) for item in greedy_payload["token_ids"])
+        else:
+            greedy = session.greedy_continuation(prompt)
+            greedy_payload = {
                 "schema_version": 1,
                 "phase": phase,
                 "prompt_id": prompt.id,
-                "sampling": SamplingMode.SEEDED_SAMPLING.value,
-                "seed": seed,
-                "token_ids": list(forced),
+                "sampling": SamplingMode.GREEDY.value,
+                "seed": None,
+                "token_ids": list(greedy),
             }
-            writer.write_case(f"continuation__{prompt.id}__s{seed}", payload)
+            writer.write_case(greedy_case, greedy_payload)
+        records.append(greedy_payload)
+        result[(prompt.id, None)] = greedy
+        for seed in session.config.identity.continuation_seeds:
+            case_id = f"continuation__{prompt.id}__s{seed}"
+            if case_id in completed:
+                payload = _read_case(writer, case_id)
+                forced = tuple(int(item) for item in payload["token_ids"])
+            else:
+                forced = session.sampled_continuation(prompt, seed)
+                payload = {
+                    "schema_version": 1,
+                    "phase": phase,
+                    "prompt_id": prompt.id,
+                    "sampling": SamplingMode.SEEDED_SAMPLING.value,
+                    "seed": seed,
+                    "token_ids": list(forced),
+                }
+                writer.write_case(case_id, payload)
             records.append(payload)
             result[(prompt.id, seed)] = forced
     writer.write_phase(phase, {"schema_version": 1, "forwards": 96, "cases": records})
@@ -834,7 +870,7 @@ class _MeasurementSession:
         handle: BackboneHandle,
         config: RunConfig,
         *,
-        memory: IncrementalMemoryWriter | None = None,
+        memory: IncrementalMemoryWriter | AttemptMemoryWriter | None = None,
     ) -> None:
         self.handle = handle
         self.config = config
@@ -963,6 +999,10 @@ class _MeasurementSession:
         warm_forced = forced_token_ids or timing_continuation(path.prompt, steps)
         warmups = self.warm(path, warm_forced, steps)
         reference, candidate = endpoints or (self.reference, self.runner)
+        # A logits-only measurement must not capture boundary state at all:
+        # retaining FULL_BOUNDARIES frames for 64 probe steps holds gigabytes
+        # of GPU state that the serialisation would immediately discard.
+        capture_profile = CaptureProfile.LOGITS_ONLY if logits_only else None
         results: list[dict[str, Any]] = []
         fingerprints: list[tuple[str, str]] = []
         for repetition in range(repetitions):
@@ -976,6 +1016,7 @@ class _MeasurementSession:
                     segmentation=path.segmentation,
                     forced_token_ids=forced_token_ids,
                     capture=True,
+                    capture_profile=capture_profile,
                 )
             else:
                 pair = run_aligned_pair(
@@ -987,6 +1028,7 @@ class _MeasurementSession:
                     segmentation=path.segmentation,
                     forced_token_ids=forced_token_ids,
                     capture=True,
+                    capture_profile=capture_profile,
                 )
             fingerprints.append((pair.reference_fingerprint, pair.candidate_fingerprint))
             results.append(
@@ -1427,8 +1469,33 @@ def _flatten_reference_floor(cases: Iterable[dict[str, Any]]) -> list[dict[str, 
     return result
 
 
+def _require_candidate_pass(verdict: dict[str, Any]) -> None:
+    """A hard measured failure must terminate the run as FAIL, not exit 0.
+
+    The candidate verdict is already written to disk when this check runs, so
+    the reviewable evidence survives; only the process outcome is corrected.
+    """
+    if verdict.get("verdict") != "CANDIDATE_PASS":
+        raise CampaignError(
+            "candidate verdict is "
+            f"{verdict.get('verdict')!r} ({verdict.get('reason')}); "
+            "the campaign terminates as FAIL"
+        )
+
+
+def _reference_floor_maximum(noise_floor: Iterable[dict[str, Any]]) -> float | None:
+    """Maximum RR logits delta from the measured alternating noise floor."""
+    deltas = [
+        float(item["max_abs_delta"]) for item in _flatten_reference_floor(noise_floor)
+    ]
+    return max(deltas) if deltas else None
+
+
 def _adjudicate_snapshot_candidate(
-    snapshot_payload: dict[str, Any], candidate: dict[str, Any]
+    snapshot_payload: dict[str, Any],
+    candidate: dict[str, Any],
+    *,
+    reference_floor_max_abs_delta: float | None = None,
 ) -> dict[str, Any]:
     record = next(
         (
@@ -1442,7 +1509,22 @@ def _adjudicate_snapshot_candidate(
     )
     if record is None:
         raise CampaignError("candidate tolerances omit short cached logits")
-    threshold = float(record["max_abs_delta"])
+    candidate_row = float(record["max_abs_delta"])
+    # ADR-0005 forbids any logits criterion tighter than the measured
+    # reference/reference floor; the snapshot adjudication follows the same
+    # rule so an exact calibration row cannot demand a 0.0 restore threshold
+    # below the backend's own measured repeat noise.
+    floor = (
+        float(reference_floor_max_abs_delta)
+        if reference_floor_max_abs_delta is not None
+        else None
+    )
+    threshold = candidate_row if floor is None else max(candidate_row, floor)
+    threshold_source = (
+        "candidate_row"
+        if floor is None or candidate_row >= floor
+        else "reference_floor"
+    )
     failures: list[dict[str, Any]] = []
     for observation in snapshot_payload["observations"]:
         for index, comparison in enumerate(observation["comparisons"]):
@@ -1469,6 +1551,9 @@ def _adjudicate_snapshot_candidate(
         "verdict": "CANDIDATE_PASS" if not failures else "FAIL",
         "tolerance_key": ["decode_cached", "logits", "short"],
         "max_abs_delta": threshold,
+        "candidate_row_max_abs_delta": candidate_row,
+        "reference_floor_max_abs_delta": floor,
+        "threshold_source": threshold_source,
         "snapshot_stability": snapshot_payload["stability"],
         "first_failure": failures[0] if failures else None,
     }
