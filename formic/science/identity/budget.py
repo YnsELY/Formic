@@ -8,18 +8,23 @@ from pathlib import Path
 from typing import Any
 
 
-PROTOCOL_ID = "SPEC-02-h8-option-b-balanced-v2"
+PROTOCOL_ID = "SPEC-02-h8-option-b-balanced-v3"
 PREFLIGHT_FORWARDS = 333
+# v3 adds measured-then-discarded burn-in after every non-empty warmup block
+# (4 pair traces for the paired gates, 1 repetition for cross-path cases) and
+# per-endpoint warmups (the runner is now warmed for prefill_full,
+# decode_recompute and long cached decode).  See ADR-0005 and
+# scripts/estimate_step2_campaign.py for the per-phase derivation.
 EXPECTED_PHASE_FORWARDS = {
-    "trace_inertness": 120,
-    "legacy_continuity": 3_552,
-    "noise_floor": 624,
-    "snapshot_restore": 48,
+    "trace_inertness": 144,
+    "legacy_continuity": 3_872,
+    "noise_floor": 752,
+    "snapshot_restore": 64,
     "reference_continuations": 96,
-    "short": 672,
-    "medium": 672,
-    "long": 384,
-    "accumulation_probe_64": 2_048,
+    "short": 808,
+    "medium": 808,
+    "long": 488,
+    "accumulation_probe_64": 2_304,
 }
 
 

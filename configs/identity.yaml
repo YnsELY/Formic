@@ -89,6 +89,8 @@ identity:
   accumulation_probe_tokens: 64
   measurement_repetitions: 3
   exact_gate_repetitions: 2
+  burn_in_pair_traces: 4
+  burn_in_repetitions: 1
   continuation_seeds: [0, 1, 2]
   decode_prompt_ids: [short_error_assertion, medium_cache_regression, long_resume_incidents]
   accumulation_probe_prompt_ids: [short_error_assertion, medium_cache_regression]

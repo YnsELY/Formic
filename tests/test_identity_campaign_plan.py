@@ -8,17 +8,17 @@ from formic.science.identity.prompts import load_frozen_corpus
 from formic.science.identity.types import ExecutionMode
 
 
-def test_final_a40_plan_is_pinned_to_the_balanced_8549_forward_protocol():
+def test_final_a40_plan_is_pinned_to_the_balanced_9669_forward_protocol():
     config = load_config("configs/default.yaml")
     corpus = load_frozen_corpus("configs/reference_prompts.yaml")
     plan = build_campaign_plan(config, corpus)
 
     assert len(plan.preflight_paths) == 18
-    assert plan.total_forwards == 8_549
-    assert plan.phase_forwards["trace_inertness"] == 120
-    assert plan.phase_forwards["legacy_continuity"] == 3_552
-    assert plan.phase_forwards["noise_floor"] == 624
-    assert plan.phase_forwards["accumulation_probe_64"] == 2_048
+    assert plan.total_forwards == 9_669
+    assert plan.phase_forwards["trace_inertness"] == 144
+    assert plan.phase_forwards["legacy_continuity"] == 3_872
+    assert plan.phase_forwards["noise_floor"] == 752
+    assert plan.phase_forwards["accumulation_probe_64"] == 2_304
     assert all(
         item.mode is not ExecutionMode.DECODE_RECOMPUTE or item.prompt.length_class != "long"
         for item in plan.calibration_paths
@@ -38,7 +38,11 @@ def test_final_a40_plan_is_pinned_to_the_balanced_8549_forward_protocol():
         assert modes == [ExecutionMode.DECODE_RECOMPUTE, ExecutionMode.DECODE_CACHED]
 
 
-def test_a40_35_gib_resolved_config_matches_successful_crossover():
+def test_a40_35_gib_resolved_config_hash_is_pinned():
+    # The v2 hash validated by the balanced crossover was
+    # b0b2ca19b553ea06f41b0cf4f876107bfd843ad08d0ccf5c281123ce3c7965b5; the v3
+    # burn-in keys deliberately change the resolved hash (and therefore
+    # invalidate every pre-v3 resume).  This pin detects accidental drift.
     config = load_config("configs/default.yaml")
     config = replace(
         config,
@@ -49,7 +53,7 @@ def test_a40_35_gib_resolved_config_matches_successful_crossover():
     )
 
     assert config.config_hash() == (
-        "b0b2ca19b553ea06f41b0cf4f876107bfd843ad08d0ccf5c281123ce3c7965b5"
+        "742dabcabb9c597c276f32ea448fd3b0fd2535d3d0035957855268c3db07488b"
     )
 
 

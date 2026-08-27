@@ -39,6 +39,75 @@ _NOISE_PAIRS = (
 )
 
 
+def _run_burn_in(
+    calendar: str,
+    pair_plan: tuple[str, ...],
+    endpoints: dict[str, Endpoint],
+    *,
+    prompt_token_ids: tuple[int, ...],
+    forced_token_ids: tuple[int, ...],
+    burn_in_pair_traces: int,
+    warmup_pair_traces: int,
+    process_ordinal_base: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Execute measured-path pair traces that are recorded but never admitted.
+
+    Run a40-2026-08-26-r1 measured the documented first-execution realisation
+    switch (ADR-0004) extending past a capture-free warmup into the first ~2
+    measured pair traces.  The burn-in therefore replays the *exact* measured
+    path — ``capture=True`` including the per-step CPU logit copies — so the
+    first admitted trace is already in the stationary realisation.  It runs
+    only after a non-empty warmup block: without one, the case continues an
+    already-hot measured stream and needs no re-entry traces.
+    """
+    if burn_in_pair_traces < 0:
+        raise ValueError("burn-in count must be non-negative")
+    executed = burn_in_pair_traces if warmup_pair_traces > 0 else 0
+    results: list[dict[str, Any]] = []
+    for index in range(executed):
+        pair_name = pair_plan[index % len(pair_plan)]
+        left_name, right_name = PAIR_ENDPOINTS[pair_name]
+        result = run_schedule_pair(
+            calendar,
+            endpoints[left_name],
+            endpoints[right_name],
+            prompt_token_ids=prompt_token_ids,
+            forced_token_ids=forced_token_ids,
+            capture=True,
+        )
+        if result is None:
+            raise RuntimeError("burn-in pair omitted its measured-path result")
+        results.append(
+            {
+                "burn_in_ordinal": index,
+                "pair": pair_name,
+                "process_lifetime_ordinal_base": process_ordinal_base + index * 16,
+                "left_path_fingerprint": result["left_path_fingerprint"],
+                "right_path_fingerprint": result["right_path_fingerprint"],
+                "cache_independence": result["cache_independence"],
+                "autograd_disabled_all_forwards": result[
+                    "autograd_disabled_all_forwards"
+                ],
+                "steps": result["steps"],
+            }
+        )
+    return results, executed
+
+
+def _burn_in_block(
+    requested: int, executed: int, results: list[dict[str, Any]]
+) -> dict[str, Any]:
+    return {
+        "pair_traces_requested": requested,
+        "executed_pair_traces": executed,
+        "executed": executed > 0,
+        "policy": "measured_discarded_after_warmup",
+        "state_capture": True,
+        "excluded_from_blocking_criteria": True,
+        "pair_results": results,
+    }
+
+
 def run_balanced_logits_gate(
     reference: Endpoint,
     runner: Endpoint,
@@ -47,6 +116,7 @@ def run_balanced_logits_gate(
     forced_token_ids: tuple[int, ...],
     repetitions: int,
     warmup_pair_traces: int,
+    burn_in_pair_traces: int,
     observer: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Run a four-round Latin ABBA crossover and return matched evidence.
@@ -76,10 +146,21 @@ def run_balanced_logits_gate(
         )
         if result is not None:
             raise RuntimeError("balanced warmup retained a measured result")
+    burn_in_results, executed_burn_in = _run_burn_in(
+        "abba",
+        PAIR_NAMES,
+        endpoints,
+        prompt_token_ids=prompt_token_ids,
+        forced_token_ids=forced_token_ids,
+        burn_in_pair_traces=burn_in_pair_traces,
+        warmup_pair_traces=warmup_pair_traces,
+        process_ordinal_base=warmup_pair_traces * 16,
+    )
+    burn_in = _burn_in_block(burn_in_pair_traces, executed_burn_in, burn_in_results)
 
     bank = CPULogitBank()
     pair_results: list[dict[str, Any]] = []
-    process_ordinal = warmup_pair_traces * 16
+    process_ordinal = (warmup_pair_traces + executed_burn_in) * 16
     try:
         for round_index in range(len(PAIR_NAMES)):
             schedule = PAIR_NAMES[round_index:] + PAIR_NAMES[:round_index]
@@ -148,6 +229,7 @@ def run_balanced_logits_gate(
                 rounds_completed=round_index + 1,
                 repetitions_expected=repetitions,
                 warmup_pair_traces=warmup_pair_traces,
+                burn_in=burn_in,
             )
             if observer is not None:
                 observer(partial)
@@ -158,6 +240,7 @@ def run_balanced_logits_gate(
             rounds_completed=len(PAIR_NAMES),
             repetitions_expected=repetitions,
             warmup_pair_traces=warmup_pair_traces,
+            burn_in=burn_in,
         )
         if not payload["matched_endpoint_exact"]:
             raise RuntimeError("balanced endpoint identity comparison diverged")
@@ -178,6 +261,7 @@ def run_alternating_noise_floor(
     forced_token_ids: tuple[int, ...],
     repetitions: int,
     warmup_pair_traces: int,
+    burn_in_pair_traces: int,
     observer: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Measure RR/NN/RN under the stable alternating r6 calendar.
@@ -206,6 +290,17 @@ def run_alternating_noise_floor(
             capture=False,
         ) is not None:
             raise RuntimeError("noise-floor warmup retained a measured result")
+    burn_in_results, executed_burn_in = _run_burn_in(
+        "alternating",
+        _NOISE_PAIRS,
+        endpoints,
+        prompt_token_ids=prompt_token_ids,
+        forced_token_ids=forced_token_ids,
+        burn_in_pair_traces=burn_in_pair_traces,
+        warmup_pair_traces=warmup_pair_traces,
+        process_ordinal_base=warmup_pair_traces * 16,
+    )
+    burn_in = _burn_in_block(burn_in_pair_traces, executed_burn_in, burn_in_results)
 
     results: list[dict[str, Any]] = []
     for pair_name in _NOISE_PAIRS:
@@ -240,6 +335,7 @@ def run_alternating_noise_floor(
                         results,
                         repetitions=repetitions,
                         warmup_pair_traces=warmup_pair_traces,
+                        burn_in=burn_in,
                         complete=False,
                     )
                 )
@@ -247,6 +343,7 @@ def run_alternating_noise_floor(
         results,
         repetitions=repetitions,
         warmup_pair_traces=warmup_pair_traces,
+        burn_in=burn_in,
         complete=True,
     )
     if not payload["last_two_pair_traces_exact"]:
@@ -261,6 +358,7 @@ def _noise_payload(
     *,
     repetitions: int,
     warmup_pair_traces: int,
+    burn_in: dict[str, Any],
     complete: bool,
 ) -> dict[str, Any]:
     stability: dict[str, Any] = {}
@@ -286,11 +384,12 @@ def _noise_payload(
     ]
     return {
         "schema_version": 1,
-        "protocol": "SPEC-02-alternating-noise-floor-h8-v1",
+        "protocol": "SPEC-02-alternating-noise-floor-h8-v2",
         "status": "COMPLETE" if complete else "MEASURING",
         "calendar": "alternating",
         "warmup_pair_traces": warmup_pair_traces,
         "warmup_state_capture": False,
+        "burn_in": burn_in,
         "repetitions_expected": repetitions,
         "pairs": list(_NOISE_PAIRS),
         "pair_results": list(results),
@@ -308,6 +407,7 @@ def _payload(
     rounds_completed: int,
     repetitions_expected: int,
     warmup_pair_traces: int,
+    burn_in: dict[str, Any],
 ) -> dict[str, Any]:
     complete = rounds_completed == len(PAIR_NAMES)
     contrasts = _contrasts(bank, repetitions_expected) if complete else []
@@ -322,10 +422,11 @@ def _payload(
     controls = _control_floor(pair_results)
     return {
         "schema_version": 1,
-        "protocol": "SPEC-02-balanced-abba-latin4-h8-v2",
+        "protocol": "SPEC-02-balanced-abba-latin4-h8-v3",
         "status": "COMPLETE" if complete else "MEASURING",
         "warmup_pair_traces": warmup_pair_traces,
         "warmup_state_capture": False,
+        "burn_in": burn_in,
         "rounds_completed": rounds_completed,
         "rounds_expected": len(PAIR_NAMES),
         "repetitions_completed": repetitions_expected if complete else 0,

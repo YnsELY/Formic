@@ -23,6 +23,11 @@ MEASUREMENT_REPETITIONS = 3
 EXACT_GATE_REPETITIONS = 2
 ENDPOINTS = 2
 DECODE_STEPS = 8
+# Protocol v3: measured-then-discarded burn-in after every non-empty warmup
+# block (4 pair traces for the paired gates, 1 repetition for cross-path
+# cases), and per-endpoint warmups.
+BURN_IN_PAIR_TRACES = 4
+BURN_IN_REPETITIONS = 1
 
 # BF16 transfer model for the audited 64-layer text backbone.
 LOGITS_BYTES = 248_320 * 2
@@ -183,28 +188,35 @@ def main_case(
 ) -> Cost:
     frames = _frames(prompt, path, segmentation, decode_steps)
     reference_frames = _reference_frames(prompt, path, segmentation, decode_steps)
-    # Greedy and sampled decoding share the same six warm traces.  Prefill has
-    # one variant. Every measured comparison has two aligned endpoints.
+    # Greedy and sampled decoding share the same warm traces and burn-in.
+    # Prefill has one variant. Every measured comparison has two aligned
+    # endpoints.
     variants = 2 if path.startswith("decode_") else 1
     measured_pairs = MEASUREMENT_REPETITIONS * variants
-    if path == "prefill_segmented":
-        reference_warmups, candidate_warmups = WARMUP_TRACES, WARMUP_TRACES
-    elif path == "decode_cached" and prompt.length_class != "long":
+    # Per-endpoint warmup ledgers: both endpoints warm their own path, except
+    # the short/medium cached candidate whose recompute reference shapes were
+    # already warmed by the preceding decode_recompute case.
+    if path == "decode_cached" and prompt.length_class != "long":
         reference_warmups, candidate_warmups = 0, WARMUP_TRACES
     else:
-        reference_warmups, candidate_warmups = WARMUP_TRACES, 0
+        reference_warmups, candidate_warmups = WARMUP_TRACES, WARMUP_TRACES
+    # One measured-then-discarded pair runs after the (always non-empty)
+    # warmup block of each case, shared by the decode variants.
+    burn_in_pairs = BURN_IN_REPETITIONS
     return Cost(
         forwards=(
             reference_warmups * len(reference_frames)
             + candidate_warmups * len(frames)
-            + measured_pairs * (len(reference_frames) + len(frames))
+            + (burn_in_pairs + measured_pairs)
+            * (len(reference_frames) + len(frames))
         ),
         input_tokens=(
             reference_warmups * sum(reference_frames)
             + candidate_warmups * sum(frames)
-            + measured_pairs * (sum(reference_frames) + sum(frames))
+            + (burn_in_pairs + measured_pairs)
+            * (sum(reference_frames) + sum(frames))
         ),
-        transfer_bytes=measured_pairs
+        transfer_bytes=(burn_in_pairs + measured_pairs)
         * (
             _reference_transfer(prompt, path, segmentation, decode_steps)
             + _trace_transfer(prompt, path, segmentation, decode_steps)
@@ -276,49 +288,70 @@ def _phase_costs(main_totals: tuple[int, int, int]) -> list[tuple[str, Cost, str
     legacy = tuple(Prompt(f"legacy_{i + 1}", "legacy", n) for i, n in enumerate((4, 5, 20, 24, 86, 86)))
     all_prompts = legacy + PROMPTS
 
-    # Inertness: six warm traces followed by two OFF and two ON exact traces.
-    inert_forwards = sum(10 for _ in all_prompts)
-    inert_tokens = sum(10 * prompt.tokens for prompt in all_prompts)
+    # Inertness: six warm traces, one measured-then-discarded OFF/ON burn-in
+    # pair, then two OFF and two ON exact traces.
+    inert_forwards = sum(12 for _ in all_prompts)
+    inert_tokens = sum(12 * prompt.tokens for prompt in all_prompts)
     inert_transfer = sum(
-        2 * (_long_final_bytes(prompt.tokens) if prompt.length_class == "long" else _full_frame_bytes(prompt.tokens, prompt.tokens))
-        + 2 * LOGITS_BYTES
+        3 * (_long_final_bytes(prompt.tokens) if prompt.length_class == "long" else _full_frame_bytes(prompt.tokens, prompt.tokens))
+        + 3 * LOGITS_BYTES
         for prompt in all_prompts
     )
     inert = Cost(inert_forwards, inert_tokens, inert_transfer, "prefill corpus complet")
 
     # Legacy gate: every treatment rotates through all four configuration
-    # ordinals, with three measured repetitions per configuration. Six pair
-    # warmups are shared by exact path shape (five distinct legacy lengths).
+    # ordinals, with two measured repetitions per slot. Six pair warmups are
+    # shared by exact path shape (five distinct legacy lengths) and each
+    # non-empty warmup block is followed by four measured-then-discarded
+    # burn-in pair traces.
     unique_legacy = tuple({prompt.tokens: prompt for prompt in legacy}.values())
     legacy_measured_pair_traces = len(legacy) * 4 * 4 * EXACT_GATE_REPETITIONS
     legacy_warm_pair_traces = len(unique_legacy) * WARMUP_TRACES
+    legacy_burn_in_pair_traces = len(unique_legacy) * BURN_IN_PAIR_TRACES
     legacy_cost = Cost(
-        forwards=(legacy_measured_pair_traces + legacy_warm_pair_traces) * 16,
+        forwards=(
+            legacy_measured_pair_traces
+            + legacy_warm_pair_traces
+            + legacy_burn_in_pair_traces
+        )
+        * 16,
         input_tokens=(
             sum(
                 4 * 4 * EXACT_GATE_REPETITIONS * 2 * (prompt.tokens + DECODE_STEPS - 1)
                 for prompt in legacy
             )
             + sum(
-                WARMUP_TRACES * 2 * (prompt.tokens + DECODE_STEPS - 1)
+                (WARMUP_TRACES + BURN_IN_PAIR_TRACES)
+                * 2
+                * (prompt.tokens + DECODE_STEPS - 1)
                 for prompt in unique_legacy
             )
         ),
-        transfer_bytes=legacy_measured_pair_traces * 16 * LOGITS_BYTES,
+        transfer_bytes=(
+            legacy_measured_pair_traces + legacy_burn_in_pair_traces
+        )
+        * 16
+        * LOGITS_BYTES,
         shapes="ABBA Latin-4, cached 8 étapes",
     )
 
     # Alternating r6 noise floor: RR/NN/RN × 3 repetitions. Audit_echo reuses
-    # the legacy warmup; short and medium each warm six pair traces.
+    # the legacy warmup (no warmup, hence no burn-in); short and medium each
+    # warm six pair traces then burn in four measured-then-discarded pairs.
     noise_prompts = (legacy[0], PROMPTS[0], PROMPTS[2])
-    noise_pair_traces = (9, 15, 15)
+    noise_pair_traces = (
+        9,
+        WARMUP_TRACES + BURN_IN_PAIR_TRACES + 9,
+        WARMUP_TRACES + BURN_IN_PAIR_TRACES + 9,
+    )
+    noise_captured_pair_traces = (9, BURN_IN_PAIR_TRACES + 9, BURN_IN_PAIR_TRACES + 9)
     noise_cost = Cost(
         forwards=sum(noise_pair_traces) * 16,
         input_tokens=sum(
             traces * 2 * (prompt.tokens + DECODE_STEPS - 1)
             for prompt, traces in zip(noise_prompts, noise_pair_traces)
         ),
-        transfer_bytes=len(noise_prompts) * 9 * 16 * LOGITS_BYTES,
+        transfer_bytes=sum(noise_captured_pair_traces) * 16 * LOGITS_BYTES,
         shapes="alternating, cached 8 étapes, logits seulement",
     )
 
@@ -331,23 +364,26 @@ def _phase_costs(main_totals: tuple[int, int, int]) -> list[tuple[str, Cost, str
         shapes="greedy + 3 seeds, génération de référence uniquement",
     )
 
+    # Snapshot/restore: one measured-then-discarded burn-in repetition plus
+    # three measured repetitions (16 forwards each).
     snapshot_prompt = Prompt("audit_echo", "short", 4)
-    snapshot_transfer = 6 * _trace_transfer(
+    snapshot_transfer = 8 * _trace_transfer(
         snapshot_prompt, "decode_cached", None, DECODE_STEPS
     )
     snapshot_validation = Cost(
-        forwards=6 * DECODE_STEPS,
-        input_tokens=6 * (snapshot_prompt.tokens + DECODE_STEPS - 1),
+        forwards=8 * DECODE_STEPS,
+        input_tokens=8 * (snapshot_prompt.tokens + DECODE_STEPS - 1),
         transfer_bytes=snapshot_transfer,
-        shapes="continuité cache 8 étapes, 3 comparaisons alignées",
+        shapes="continuité cache 8 étapes, 3 comparaisons alignées + burn-in",
     )
 
-    # The already proposed 64-step accumulation probe (short + medium).
+    # The already proposed 64-step accumulation probe (short + medium):
+    # 6+6 warm traces, one burn-in pair and two measured pairs per prompt.
     accumulation_prompts = (PROMPTS[0], PROMPTS[2])
     accumulation = Cost(
-        forwards=len(accumulation_prompts) * 16 * 64,
-        input_tokens=sum(16 * (prompt.tokens + 63) for prompt in accumulation_prompts),
-        transfer_bytes=len(accumulation_prompts) * 4 * 64 * LOGITS_BYTES,
+        forwards=len(accumulation_prompts) * 18 * 64,
+        input_tokens=sum(18 * (prompt.tokens + 63) for prompt in accumulation_prompts),
+        transfer_bytes=len(accumulation_prompts) * 6 * 64 * LOGITS_BYTES,
         shapes="cached vs recompute, 64 étapes, logits seulement",
     )
     preflight = Cost(

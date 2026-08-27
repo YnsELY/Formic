@@ -156,6 +156,7 @@ def test_balanced_gate_rotates_every_treatment_through_every_slot(monkeypatch):
         forced_token_ids=(5, 6, 7, 8, 9, 10, 11, 12),
         repetitions=3,
         warmup_pair_traces=0,
+        burn_in_pair_traces=4,
     )
 
     assert payload["status"] == "COMPLETE"
@@ -248,6 +249,7 @@ def test_alternating_noise_floor_is_stable_and_logits_only(monkeypatch):
         forced_token_ids=(5, 6, 7, 8, 9, 10, 11, 12),
         repetitions=3,
         warmup_pair_traces=6,
+        burn_in_pair_traces=4,
     )
 
     assert payload["status"] == "COMPLETE"

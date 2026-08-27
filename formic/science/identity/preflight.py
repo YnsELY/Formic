@@ -18,18 +18,19 @@ from formic.science.identity.executor import (
 )
 
 
-# Volumes from the approved cost plan.  They are estimates only; the exact
+# Volumes from the approved cost plan (v3, burn-in included; regenerate with
+# scripts/estimate_step2_campaign.py).  They are estimates only; the exact
 # captured-state accounting remains in every measured case artefact.
 _PHASE_TRANSFER_GIB = {
-    "trace_inertness": 2.81,
-    "legacy_continuity": 1.42,
-    "noise_floor": 0.20,
-    "snapshot_restore": 3.61,
+    "trace_inertness": 4.22,
+    "legacy_continuity": 1.57,
+    "noise_floor": 0.26,
+    "snapshot_restore": 4.81,
     "reference_continuations": 0.0,
-    "short": 14.75,
-    "medium": 27.94,
-    "long": 14.49,
-    "accumulation_probe_64": 0.24,
+    "short": 18.93,
+    "medium": 35.23,
+    "long": 18.87,
+    "accumulation_probe_64": 0.36,
 }
 
 
@@ -311,23 +312,26 @@ def _estimate_from_timings(
     def with_transfer(name: str, execution_seconds: float) -> float:
         return execution_seconds + (_PHASE_TRANSFER_GIB[name] * 2**30 / transfer_bytes_per_second)
 
+    # Path-trace multipliers follow the v3 protocol: per-endpoint warmups plus
+    # measured-then-discarded burn-in after every non-empty warmup block.  See
+    # scripts/estimate_step2_campaign.py for the per-phase derivation.
     phase_seconds: dict[str, float] = {}
     phase_seconds["trace_inertness"] = with_transfer(
         "trace_inertness",
-        80 * path_time("short", "prefill_full")
-        + 20 * path_time("medium", "prefill_full")
-        + 20 * path_time("long", "prefill_full"),
+        96 * path_time("short", "prefill_full")
+        + 24 * path_time("medium", "prefill_full")
+        + 24 * path_time("long", "prefill_full"),
     )
     phase_seconds["legacy_continuity"] = with_transfer(
-        "legacy_continuity", 444 * path_time("short", "decode_cached")
+        "legacy_continuity", 484 * path_time("short", "decode_cached")
     )
     phase_seconds["noise_floor"] = with_transfer(
         "noise_floor",
-        48 * path_time("short", "decode_cached")
-        + 30 * path_time("medium", "decode_cached"),
+        56 * path_time("short", "decode_cached")
+        + 38 * path_time("medium", "decode_cached"),
     )
     phase_seconds["snapshot_restore"] = with_transfer(
-        "snapshot_restore", 6 * path_time("short", "decode_cached")
+        "snapshot_restore", 8 * path_time("short", "decode_cached")
     )
     phase_seconds["reference_continuations"] = with_transfer(
         "reference_continuations",
@@ -341,21 +345,24 @@ def _estimate_from_timings(
         segmentations = ("median", "quarters") if length_class == "long" else (
             "early", "median", "late", "quarters"
         )
-        prefill_paths = 24 * path_time(length_class, "prefill_full") + 18 * sum(
+        prefill_paths = 40 * path_time(length_class, "prefill_full") + 20 * sum(
             path_time(length_class, "prefill_segmented", item)
             + reference_time(length_class, "prefill_segmented", item)
             for item in segmentations
         )
         if length_class == "long":
-            decode_paths = 18 * path_time(length_class, "decode_cached")
+            # Long cached decode warms both endpoints (6+6), burns in one
+            # pair (1+1) and measures six pairs: 13 traces per side.
+            decode_paths = 26 * path_time(length_class, "decode_cached")
         else:
             # The cached candidate is calibrated against a full-recompute
-            # reference: 12 cached path traces + 6 recompute traces, in
-            # addition to the 18 recompute/recompute path traces.
+            # reference: 13 cached traces (6 warm + 1 burn-in + 6 measured)
+            # + 7 recompute reference traces (1 burn-in + 6 measured), in
+            # addition to the 26 recompute/recompute path traces.
             decode_paths = (
-                12 * path_time(length_class, "decode_cached")
-                + 6 * reference_time(length_class, "decode_cached")
-                + 18 * path_time(length_class, "decode_recompute")
+                13 * path_time(length_class, "decode_cached")
+                + 7 * reference_time(length_class, "decode_cached")
+                + 26 * path_time(length_class, "decode_recompute")
             )
         phase_seconds[length_class] = with_transfer(
             length_class,
@@ -363,10 +370,10 @@ def _estimate_from_timings(
         )
     phase_seconds["accumulation_probe_64"] = with_transfer(
         "accumulation_probe_64",
-        512 * (path_time("short", "decode_cached") / 8)
-        + 512 * (reference_time("short", "decode_cached") / 8)
-        + 512 * (path_time("medium", "decode_cached") / 8)
-        + 512 * (reference_time("medium", "decode_cached") / 8),
+        576 * (path_time("short", "decode_cached") / 8)
+        + 576 * (reference_time("short", "decode_cached") / 8)
+        + 576 * (path_time("medium", "decode_cached") / 8)
+        + 576 * (reference_time("medium", "decode_cached") / 8),
     )
     phases = tuple(
         PhaseEstimate(name, EXPECTED_PHASE_FORWARDS[name], phase_seconds[name])

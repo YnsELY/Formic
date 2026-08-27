@@ -34,7 +34,11 @@ from formic.science.identity.artifacts import (
     atomic_write_json,
     sha256_bytes,
 )
-from formic.science.identity.budget import load_preflight_estimate, report_estimate
+from formic.science.identity.budget import (
+    EXPECTED_PHASE_FORWARDS,
+    load_preflight_estimate,
+    report_estimate,
+)
 from formic.science.identity.balanced_gate import (
     run_alternating_noise_floor,
     run_balanced_logits_gate,
@@ -133,7 +137,7 @@ def run_gpu_campaign(
             _repo_path(config.identity.backbone_hash_path)
         )
         identity = CampaignIdentity(
-            protocol="SPEC-02-h8-option-b-balanced-v2",
+            protocol="SPEC-02-h8-option-b-balanced-v3",
             config_sha256=config.config_hash(),
             corpus_sha256=corpus.corpus_sha256,
             git_commit=commit,
@@ -350,8 +354,14 @@ def _phase_trace_inertness(
         if case_id in writer.completed_cases():
             records.append(_read_case(writer, case_id))
             continue
-        for _ in range(session.config.numerics.warmup_traces_per_shape):
+        warmups = session.config.numerics.warmup_traces_per_shape
+        for _ in range(warmups):
             session.trace_off_prefill(prompt)
+        # Measured-then-discarded burn-in on the exact measured OFF/ON pair
+        # path; the blocking exactness check applies to admitted pairs only.
+        burn_in_metric = None
+        if warmups > 0 and session.config.identity.burn_in_repetitions > 0:
+            burn_in_metric = session.trace_off_on_pair(prompt)
         pairs = []
         for repetition in range(session.config.identity.exact_gate_repetitions):
             if not records and repetition == 0 and session.memory is not None:
@@ -368,12 +378,25 @@ def _phase_trace_inertness(
             "schema_version": 1,
             "phase": phase,
             "prompt_id": prompt.id,
-            "warmup_paths": session.config.numerics.warmup_traces_per_shape,
+            "warmup_paths": warmups,
+            "burn_in": {
+                "executed": burn_in_metric is not None,
+                "policy": "measured_discarded_after_warmup",
+                "excluded_from_blocking_criteria": True,
+                "metric": None if burn_in_metric is None else burn_in_metric.to_dict(),
+            },
             "pairs": pairs,
         }
         writer.write_case(case_id, payload)
         records.append(payload)
-    writer.write_phase(phase, {"schema_version": 1, "forwards": 120, "cases": records})
+    writer.write_phase(
+        phase,
+        {
+            "schema_version": 1,
+            "forwards": EXPECTED_PHASE_FORWARDS[phase],
+            "cases": records,
+        },
+    )
 
 
 def _phase_legacy(
@@ -398,7 +421,14 @@ def _phase_legacy(
             exact_required=True,
         )
         records.append(payload)
-    writer.write_phase(phase, {"schema_version": 1, "forwards": 3_552, "cases": records})
+    writer.write_phase(
+        phase,
+        {
+            "schema_version": 1,
+            "forwards": EXPECTED_PHASE_FORWARDS[phase],
+            "cases": records,
+        },
+    )
 
 
 def _phase_noise_floor(
@@ -430,7 +460,14 @@ def _phase_noise_floor(
                 repetitions=session.config.identity.measurement_repetitions,
             )
         )
-    writer.write_phase(phase, {"schema_version": 1, "forwards": 624, "cases": records})
+    writer.write_phase(
+        phase,
+        {
+            "schema_version": 1,
+            "forwards": EXPECTED_PHASE_FORWARDS[phase],
+            "cases": records,
+        },
+    )
     return records
 
 
@@ -452,7 +489,14 @@ def _phase_snapshot_restore(
     else:
         payload = session.snapshot_restore(prompt)
         writer.write_case(case_id, payload)
-    writer.write_phase(phase, {"schema_version": 1, "forwards": 48, "cases": [payload]})
+    writer.write_phase(
+        phase,
+        {
+            "schema_version": 1,
+            "forwards": EXPECTED_PHASE_FORWARDS[phase],
+            "cases": [payload],
+        },
+    )
     return payload
 
 
@@ -511,7 +555,14 @@ def _phase_continuations(
                 writer.write_case(case_id, payload)
             records.append(payload)
             result[(prompt.id, seed)] = forced
-    writer.write_phase(phase, {"schema_version": 1, "forwards": 96, "cases": records})
+    writer.write_phase(
+        phase,
+        {
+            "schema_version": 1,
+            "forwards": EXPECTED_PHASE_FORWARDS[phase],
+            "cases": records,
+        },
+    )
     return result
 
 
@@ -640,7 +691,14 @@ def _phase_probe64(
                 decode_steps=session.config.identity.accumulation_probe_tokens,
             )
         )
-    writer.write_phase(phase, {"schema_version": 1, "forwards": 2_048, "cases": records})
+    writer.write_phase(
+        phase,
+        {
+            "schema_version": 1,
+            "forwards": EXPECTED_PHASE_FORWARDS[phase],
+            "cases": records,
+        },
+    )
 
 
 def _measure_balanced_or_resume(
@@ -876,14 +934,26 @@ class _MeasurementSession:
         self.config = config
         self.reference = Endpoint("reference", handle.model, handle.view, False)
         self.runner = Endpoint("runner", handle.model, handle.view, True)
-        self.warmups = SharedShapeWarmups(config.numerics.warmup_traces_per_shape)
+        # One warmup ledger per endpoint: sharing a single ledger left the
+        # runner unwarmed whenever the reference had already exercised the
+        # same shapes (prefill_full, decode_recompute, long cached decode),
+        # so its first trace was a measurement and its repetition 0 could
+        # sit in the pre-transient realisation and inflate tolerance maxima.
+        self.reference_warmups = SharedShapeWarmups(
+            config.numerics.warmup_traces_per_shape
+        )
+        self.runner_warmups = SharedShapeWarmups(
+            config.numerics.warmup_traces_per_shape
+        )
         self.balanced_warmups = SharedShapeWarmups(
             config.numerics.warmup_traces_per_shape
         )
         self.plan: CampaignPlan | None = None
         self.memory = memory
 
-    def warm(self, path: CampaignPath, forced: tuple[int, ...], decode_steps: int) -> int:
+    def warm(
+        self, path: CampaignPath, forced: tuple[int, ...], decode_steps: int
+    ) -> dict[str, int]:
         candidate_shapes = expected_shapes(
             prompt_length=len(path.prompt.token_ids),
             mode=path.mode,
@@ -897,7 +967,7 @@ class _MeasurementSession:
             decode_steps=decode_steps,
             length_class=path.prompt.length_class,
         )
-        reference_count = self.warmups.required_path_traces(reference_shapes)
+        reference_count = self.reference_warmups.required_path_traces(reference_shapes)
         for _ in range(reference_count):
             execute_reference_for_candidate(
                 self.reference,
@@ -908,8 +978,8 @@ class _MeasurementSession:
                 forced_token_ids=forced,
                 capture=False,
             )
-            self.warmups.record_path_trace(reference_shapes)
-        candidate_count = self.warmups.required_path_traces(candidate_shapes)
+            self.reference_warmups.record_path_trace(reference_shapes)
+        candidate_count = self.runner_warmups.required_path_traces(candidate_shapes)
         for _ in range(candidate_count):
             execute_path(
                 self.runner,
@@ -920,8 +990,12 @@ class _MeasurementSession:
                 forced_token_ids=forced,
                 capture=False,
             )
-            self.warmups.record_path_trace(candidate_shapes)
-        return reference_count + candidate_count
+            self.runner_warmups.record_path_trace(candidate_shapes)
+        return {
+            "reference": reference_count,
+            "runner": candidate_count,
+            "total": reference_count + candidate_count,
+        }
 
     def measure_balanced_logits(
         self,
@@ -945,6 +1019,7 @@ class _MeasurementSession:
             forced_token_ids=forced_token_ids,
             repetitions=repetitions,
             warmup_pair_traces=warmups,
+            burn_in_pair_traces=self.config.identity.burn_in_pair_traces,
             observer=observer,
         )
         for _ in range(warmups):
@@ -973,6 +1048,7 @@ class _MeasurementSession:
             forced_token_ids=forced_token_ids,
             repetitions=repetitions,
             warmup_pair_traces=warmups,
+            burn_in_pair_traces=self.config.identity.burn_in_pair_traces,
             observer=observer,
         )
         for _ in range(warmups):
@@ -1003,11 +1079,10 @@ class _MeasurementSession:
         # retaining FULL_BOUNDARIES frames for 64 probe steps holds gigabytes
         # of GPU state that the serialisation would immediately discard.
         capture_profile = CaptureProfile.LOGITS_ONLY if logits_only else None
-        results: list[dict[str, Any]] = []
-        fingerprints: list[tuple[str, str]] = []
-        for repetition in range(repetitions):
+
+        def run_pair() -> Any:
             if endpoints is None:
-                pair = run_cross_path_pair(
+                return run_cross_path_pair(
                     reference,
                     candidate,
                     prompt_token_ids=path.prompt.token_ids,
@@ -1018,32 +1093,59 @@ class _MeasurementSession:
                     capture=True,
                     capture_profile=capture_profile,
                 )
-            else:
-                pair = run_aligned_pair(
-                    reference,
-                    candidate,
-                    prompt_token_ids=path.prompt.token_ids,
-                    mode=path.mode,
-                    length_class=path.prompt.length_class,
-                    segmentation=path.segmentation,
-                    forced_token_ids=forced_token_ids,
-                    capture=True,
-                    capture_profile=capture_profile,
-                )
-            fingerprints.append((pair.reference_fingerprint, pair.candidate_fingerprint))
-            results.append(
-                _pair_to_observation(
-                    pair,
-                    case_id=case_id,
-                    prompt=path.prompt,
-                    mode=path.mode,
-                    segmentation=path.segmentation,
-                    sampling=sampling,
-                    continuation_seed=continuation_seed,
-                    repetition=repetition,
-                    logits_only=logits_only,
-                )
+            return run_aligned_pair(
+                reference,
+                candidate,
+                prompt_token_ids=path.prompt.token_ids,
+                mode=path.mode,
+                length_class=path.prompt.length_class,
+                segmentation=path.segmentation,
+                forced_token_ids=forced_token_ids,
+                capture=True,
+                capture_profile=capture_profile,
             )
+
+        def observe(pair: Any, repetition: int) -> dict[str, Any]:
+            return _pair_to_observation(
+                pair,
+                case_id=case_id,
+                prompt=path.prompt,
+                mode=path.mode,
+                segmentation=path.segmentation,
+                sampling=sampling,
+                continuation_seed=continuation_seed,
+                repetition=repetition,
+                logits_only=logits_only,
+            )
+
+        # Measured-then-discarded burn-in: the warmup runs capture-free, so
+        # the first captured trace after a non-empty warmup block can still
+        # sit in the pre-transient realisation (a40-2026-08-26-r1).  These
+        # traces execute the exact measured path but never enter the
+        # blocking repetitions or the tolerance statistics.
+        burn_in_observations: list[dict[str, Any]] = []
+        if warmups["total"] > 0:
+            for burn_index in range(self.config.identity.burn_in_repetitions):
+                pair = run_pair()
+                burn_in_observations.append(
+                    {**observe(pair, burn_index), "burn_in": True}
+                )
+                del pair
+        burn_in = {
+            "repetitions_requested": self.config.identity.burn_in_repetitions,
+            "executed_repetitions": len(burn_in_observations),
+            "executed": bool(burn_in_observations),
+            "policy": "measured_discarded_after_warmup",
+            "excluded_from_blocking_criteria": True,
+            "observations": burn_in_observations,
+        }
+
+        results: list[dict[str, Any]] = []
+        fingerprints: list[tuple[str, str]] = []
+        for repetition in range(repetitions):
+            pair = run_pair()
+            fingerprints.append((pair.reference_fingerprint, pair.candidate_fingerprint))
+            results.append(observe(pair, repetition))
             if repetition_observer is not None:
                 repetition_observer(
                     _measurement_payload(
@@ -1054,6 +1156,7 @@ class _MeasurementSession:
                         warmups=warmups,
                         results=results,
                         fingerprints=fingerprints,
+                        burn_in=burn_in,
                     )
                 )
             del pair
@@ -1068,6 +1171,7 @@ class _MeasurementSession:
             warmups=warmups,
             results=results,
             fingerprints=fingerprints,
+            burn_in=burn_in,
         )
         if repetition_observer is not None:
             repetition_observer(payload)
@@ -1082,10 +1186,9 @@ class _MeasurementSession:
     ) -> dict[str, Any]:
         steps = self.config.identity.decode_tokens
         warmups = self.warm(path, timing_continuation(path.prompt, steps), steps)
-        results: list[dict[str, Any]] = []
-        fingerprints: list[tuple[str, str]] = []
-        for repetition in range(self.config.identity.measurement_repetitions):
-            pair = run_greedy_pair(
+
+        def run_pair() -> Any:
+            return run_greedy_pair(
                 self.reference,
                 self.runner,
                 prompt_token_ids=path.prompt.token_ids,
@@ -1093,20 +1196,42 @@ class _MeasurementSession:
                 decode_steps=steps,
                 capture=True,
             )
-            fingerprints.append((pair.reference_fingerprint, pair.candidate_fingerprint))
-            results.append(
-                _pair_to_observation(
-                    pair,
-                    case_id=case_id,
-                    prompt=path.prompt,
-                    mode=ExecutionMode.DECODE_CACHED,
-                    segmentation=None,
-                    sampling=SamplingMode.GREEDY,
-                    continuation_seed=None,
-                    repetition=repetition,
-                    logits_only=False,
-                )
+
+        def observe(pair: Any, repetition: int) -> dict[str, Any]:
+            return _pair_to_observation(
+                pair,
+                case_id=case_id,
+                prompt=path.prompt,
+                mode=ExecutionMode.DECODE_CACHED,
+                segmentation=None,
+                sampling=SamplingMode.GREEDY,
+                continuation_seed=None,
+                repetition=repetition,
+                logits_only=False,
             )
+
+        burn_in_observations: list[dict[str, Any]] = []
+        if warmups["total"] > 0:
+            for burn_index in range(self.config.identity.burn_in_repetitions):
+                pair = run_pair()
+                burn_in_observations.append(
+                    {**observe(pair, burn_index), "burn_in": True}
+                )
+                del pair
+        burn_in = {
+            "repetitions_requested": self.config.identity.burn_in_repetitions,
+            "executed_repetitions": len(burn_in_observations),
+            "executed": bool(burn_in_observations),
+            "policy": "measured_discarded_after_warmup",
+            "excluded_from_blocking_criteria": True,
+            "observations": burn_in_observations,
+        }
+        results: list[dict[str, Any]] = []
+        fingerprints: list[tuple[str, str]] = []
+        for repetition in range(self.config.identity.measurement_repetitions):
+            pair = run_pair()
+            fingerprints.append((pair.reference_fingerprint, pair.candidate_fingerprint))
+            results.append(observe(pair, repetition))
             if repetition_observer is not None:
                 repetition_observer(
                     _measurement_payload(
@@ -1117,6 +1242,7 @@ class _MeasurementSession:
                         warmups=warmups,
                         results=results,
                         fingerprints=fingerprints,
+                        burn_in=burn_in,
                     )
                 )
             del pair
@@ -1129,6 +1255,7 @@ class _MeasurementSession:
             warmups=warmups,
             results=results,
             fingerprints=fingerprints,
+            burn_in=burn_in,
         )
         if repetition_observer is not None:
             repetition_observer(payload)
@@ -1213,64 +1340,23 @@ class _MeasurementSession:
 
     @torch.no_grad()
     def snapshot_restore(self, prompt: FrozenPrompt) -> dict[str, Any]:
-        from transformers.cache_utils import DynamicCache
-
         steps = self.config.identity.decode_tokens
         forced = timing_continuation(prompt, steps)
         device = self.handle.device
-        observations: list[dict[str, Any]] = []
-        for repetition in range(3):
-            cache = DynamicCache(config=self.handle.model.config)
-            current = torch.tensor([prompt.token_ids], dtype=torch.long, device=device)
-            uninterrupted: list[torch.Tensor] = []
-            frozen = None
-            for step in range(steps):
-                output = self.handle.model(input_ids=current, past_key_values=cache, use_cache=True)
-                uninterrupted.append(output.logits[0, -1].detach().clone())
-                if step == 3:
-                    frozen = snapshot(
-                        model=self.handle.model,
-                        cache=cache,
-                        position=PositionState(sequence_length=int(cache.get_seq_length())),
-                    )
-                if step < steps - 1:
-                    current = torch.tensor([[forced[step]]], dtype=torch.long, device=device)
-            if frozen is None:
-                raise CampaignError("snapshot midpoint was not reached")
-            controller = ExecutionStateController(self.handle.model)
-            branch_a = controller.restore(frozen)
-            branch_b = controller.restore(frozen)
-            source_storage = {tensor_storage_identity(item) for _, item in iter_snapshot_tensors(frozen)}
-            a_storage = _branch_storage(branch_a)
-            b_storage = _branch_storage(branch_b)
-            if source_storage & a_storage or source_storage & b_storage or a_storage & b_storage:
-                raise CampaignError("snapshot fork storage isolation failed")
-            frozen_before = snapshot_fingerprint(frozen)
-            b_before = _live_cache_fingerprint(branch_b.cache)
-            # Snapshot is taken after step 3: cache contains prompt plus the
-            # first three forced IDs, so steps 4..7 consume IDs 3..6.
-            tail_tokens = forced[3:7]
-            a_logits = _continue_branch(controller, branch_a, tail_tokens, device)
-            if _live_cache_fingerprint(branch_b.cache) != b_before or snapshot_fingerprint(frozen) != frozen_before:
-                raise CampaignError("snapshot fork mutation leaked from branch A")
-            b_logits = _continue_branch(controller, branch_b, tail_tokens, device)
-            comparisons = [compare_logits(uninterrupted[4 + index], value) for index, value in enumerate(a_logits)]
-            comparisons += [compare_logits(uninterrupted[4 + index], value) for index, value in enumerate(b_logits)]
-            serialised = [item.to_dict() for item in comparisons]
-            comparison_fingerprint = sha256_bytes(
-                json.dumps(
-                    serialised, sort_keys=True, separators=(",", ":")
-                ).encode()
-            )
-            observations.append(
-                {
-                    "repetition": repetition,
-                    "all_exact": all(item.tensor.exact and item.top1_agreement for item in comparisons),
-                    "max_abs_delta": max(item.tensor.max_abs_delta for item in comparisons),
-                    "comparison_fingerprint": comparison_fingerprint,
-                    "comparisons": serialised,
-                }
-            )
+        # Measured-then-discarded burn-in: this phase has no warmup block and
+        # the snapshot/restore path is new to the process, so one complete
+        # repetition runs first and stays outside both the blocking last-two
+        # assertion and the later tolerance adjudication.
+        burn_in_observation = None
+        if self.config.identity.burn_in_repetitions > 0:
+            burn_in_observation = {
+                **self._snapshot_repetition(prompt, forced, steps, device, "burn_in"),
+                "burn_in": True,
+            }
+        observations: list[dict[str, Any]] = [
+            self._snapshot_repetition(prompt, forced, steps, device, repetition)
+            for repetition in range(3)
+        ]
         last_two_exact = (
             observations[-2]["comparison_fingerprint"]
             == observations[-1]["comparison_fingerprint"]
@@ -1284,11 +1370,78 @@ class _MeasurementSession:
             "phase": "snapshot_restore",
             "case_id": "snapshot_restore__audit_echo",
             "prompt_id": prompt.id,
+            "burn_in": {
+                "executed": burn_in_observation is not None,
+                "policy": "measured_discarded_after_warmup",
+                "excluded_from_blocking_criteria": True,
+                "observation": burn_in_observation,
+            },
             "observations": observations,
             "stability": {
                 "assertion": "last_two_snapshot_contrasts_exact",
                 "last_two_exact": last_two_exact,
             },
+        }
+
+    @torch.no_grad()
+    def _snapshot_repetition(
+        self,
+        prompt: FrozenPrompt,
+        forced: tuple[int, ...],
+        steps: int,
+        device: Any,
+        repetition: int | str,
+    ) -> dict[str, Any]:
+        from transformers.cache_utils import DynamicCache
+
+        cache = DynamicCache(config=self.handle.model.config)
+        current = torch.tensor([prompt.token_ids], dtype=torch.long, device=device)
+        uninterrupted: list[torch.Tensor] = []
+        frozen = None
+        for step in range(steps):
+            output = self.handle.model(input_ids=current, past_key_values=cache, use_cache=True)
+            uninterrupted.append(output.logits[0, -1].detach().clone())
+            if step == 3:
+                frozen = snapshot(
+                    model=self.handle.model,
+                    cache=cache,
+                    position=PositionState(sequence_length=int(cache.get_seq_length())),
+                )
+            if step < steps - 1:
+                current = torch.tensor([[forced[step]]], dtype=torch.long, device=device)
+        if frozen is None:
+            raise CampaignError("snapshot midpoint was not reached")
+        controller = ExecutionStateController(self.handle.model)
+        branch_a = controller.restore(frozen)
+        branch_b = controller.restore(frozen)
+        source_storage = {tensor_storage_identity(item) for _, item in iter_snapshot_tensors(frozen)}
+        a_storage = _branch_storage(branch_a)
+        b_storage = _branch_storage(branch_b)
+        if source_storage & a_storage or source_storage & b_storage or a_storage & b_storage:
+            raise CampaignError("snapshot fork storage isolation failed")
+        frozen_before = snapshot_fingerprint(frozen)
+        b_before = _live_cache_fingerprint(branch_b.cache)
+        # Snapshot is taken after step 3: cache contains prompt plus the
+        # first three forced IDs, so steps 4..7 consume IDs 3..6.
+        tail_tokens = forced[3:7]
+        a_logits = _continue_branch(controller, branch_a, tail_tokens, device)
+        if _live_cache_fingerprint(branch_b.cache) != b_before or snapshot_fingerprint(frozen) != frozen_before:
+            raise CampaignError("snapshot fork mutation leaked from branch A")
+        b_logits = _continue_branch(controller, branch_b, tail_tokens, device)
+        comparisons = [compare_logits(uninterrupted[4 + index], value) for index, value in enumerate(a_logits)]
+        comparisons += [compare_logits(uninterrupted[4 + index], value) for index, value in enumerate(b_logits)]
+        serialised = [item.to_dict() for item in comparisons]
+        comparison_fingerprint = sha256_bytes(
+            json.dumps(
+                serialised, sort_keys=True, separators=(",", ":")
+            ).encode()
+        )
+        return {
+            "repetition": repetition,
+            "all_exact": all(item.tensor.exact and item.top1_agreement for item in comparisons),
+            "max_abs_delta": max(item.tensor.max_abs_delta for item in comparisons),
+            "comparison_fingerprint": comparison_fingerprint,
+            "comparisons": serialised,
         }
 
 
@@ -1298,9 +1451,10 @@ def _measurement_payload(
     phase: str,
     case_id: str,
     prompt_id: str,
-    warmups: int,
+    warmups: dict[str, int],
     results: list[dict[str, Any]],
     fingerprints: list[tuple[str, str]],
+    burn_in: dict[str, Any],
 ) -> dict[str, Any]:
     """Serialise measured repetitions plus their cross-repetition evidence."""
     return {
@@ -1309,7 +1463,12 @@ def _measurement_payload(
         "phase": phase,
         "case_id": case_id,
         "prompt_id": prompt_id,
-        "warmup_paths": warmups,
+        "warmup_paths": warmups["total"],
+        "warmup_paths_by_endpoint": {
+            "reference": warmups["reference"],
+            "runner": warmups["runner"],
+        },
+        "burn_in": burn_in,
         "repetitions": list(results),
         "stability": _stability_details(fingerprints),
     }

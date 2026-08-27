@@ -307,6 +307,12 @@ class IdentitySection:
     accumulation_probe_tokens: int = 64
     measurement_repetitions: int = 3
     exact_gate_repetitions: int = 2
+    # Measured-then-discarded burn-in executed on the exact measured path after
+    # every non-empty warmup block.  The a40-2026-08-26-r1 run showed the
+    # first-execution realisation switch extending ~2 measured pair traces past
+    # a capture-free warmup; 4 covers that window with a 2x margin.
+    burn_in_pair_traces: int = 4
+    burn_in_repetitions: int = 1
     continuation_seeds: tuple[int, ...] = (0, 1, 2)
     decode_prompt_ids: tuple[str, ...] = (
         "short_error_assertion",
@@ -349,6 +355,10 @@ class IdentitySection:
             raise ConfigError("identity.measurement_repetitions is pinned to 3")
         if self.exact_gate_repetitions != 2:
             raise ConfigError("identity.exact_gate_repetitions is pinned to 2")
+        if self.burn_in_pair_traces != 4:
+            raise ConfigError("identity.burn_in_pair_traces is pinned to 4")
+        if self.burn_in_repetitions != 1:
+            raise ConfigError("identity.burn_in_repetitions is pinned to 1")
         if len(set(self.continuation_seeds)) != 3 or any(
             seed < 0 for seed in self.continuation_seeds
         ):
