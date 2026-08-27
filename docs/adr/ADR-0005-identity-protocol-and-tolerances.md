@@ -37,6 +37,22 @@ segmentation boundary can therefore change rounding even when the mathematical
 token sequence is unchanged. Any bounded threshold must be derived from
 repeated measurement, never selected from intuition or a single run.
 
+Campaign run `a40-2026-08-26-r1` (commit f779407, the first execution of the
+balanced launcher) then measured one further property of the backend effect.
+The run failed at the first legacy case with
+`balanced endpoint identity comparison diverged`: all 19 failing matched
+contrasts involved the reference_reference pair of round 0 — the first 32
+measured forwards of the process (ordinals 96–127, immediately after the 96
+capture-free warmup forwards) — while the same comparisons in rounds 1–3 were
+100% exact and every runner-companion contrast was 128/128 exact. The
+legacy-schedule matrix r5 had independently shown `first_changed_repetition=1`
+with `last_two_exact=true` in all three sequential configurations. Together
+these runs establish, as a measurement, that the first-execution realisation
+switch of ADR-0004 can extend past a capture-free warmup into the first ~2
+measured pair traces, because the warmup does not execute the measured path
+(no per-step CPU logit copies). No root cause is assigned beyond these
+observations.
+
 ## Proposed decision
 
 The reference is the explicit text-only `Qwen3_5ForCausalLM` loop. Wrapper
@@ -72,14 +88,30 @@ first decode steps, so eight frames retain the observed onset while reducing
 the required 27B forwards. A separate logits-only accumulation probe runs for
 64 frames on the pinned short and medium prompts. It is a long-range diagnostic:
 any growth is reported numerically without a causal attribution or an invented
-threshold.
+threshold. Logits-only applies end to end: the probe's capture profile retains
+no boundary or model state at any frame, so 64-frame traces never hold
+gigabytes of GPU state that the serialisation would immediately discard.
 
 For each exact input length, six traces warm the path with no state capture.
-Six warmups are shared once per exact input shape and process. Three traces are
-then measured per tolerance configuration. The exact legacy continuity gate
-uses the two repetitions required to assert last-two stability, outside
+Six warmups are shared once per exact input shape and process, with one warmup
+ledger per endpoint: the reference and the runner each warm their own path,
+including when both paths share the same exact shapes. Three traces are then
+measured per tolerance configuration. The exact legacy continuity gate uses
+the two repetitions required to assert last-two stability, outside
 calibration. The last two measured traces or matched contrast signatures must
 be bit-exact or the case is invalid.
+
+After every non-empty warmup block, a measured-then-discarded burn-in runs on
+the exact measured path — capture enabled, including the per-step CPU logit
+copies — before the first admitted trace: four pair traces (one per treatment,
+RR/NN/RN/NR order) for the paired gates, one repetition for cross-path
+measurements, trace inertness and snapshot/restore. The observed transient
+window was two pair traces; four covers it with a 2x margin. Burn-in evidence
+is recorded in the artefacts (`burn_in`, `excluded_from_blocking_criteria`)
+and never enters a blocking criterion or a tolerance statistic. A case whose
+shapes are already warm runs no burn-in: it continues an already-hot measured
+stream. These counts are pinned in the config schema
+(`identity.burn_in_pair_traces = 4`, `identity.burn_in_repetitions = 1`).
 
 Inference measurements do not vary the RNG seed: every compared forward uses
 a forced continuation, stock inference has no active dropout, and token
@@ -106,7 +138,11 @@ limited to one pinned prompt per class: `short_error_assertion`,
 `medium_cache_regression`, and `long_resume_incidents`. The accumulation probe
 uses the first two of these. Snapshot/restore continuity uses `audit_echo`; its
 metrics are captured before the calibration classes, then adjudicated against
-the newly materialised tolerances without rerunning the model.
+the newly materialised tolerances without rerunning the model. The snapshot
+adjudication threshold follows the same floor rule as the logits rows: it is
+the maximum of the candidate short-cached-logits row and the measured RR
+reference floor, so an exact calibration row can never demand a 0.0 restore
+threshold below the backend's own measured repeat noise.
 
 The default criterion is exact. Where repeated measurement proves a bounded
 criterion necessary, the threshold is twice the maximum observed delta across
@@ -139,12 +175,14 @@ backbone against committed hash
 `74e1813c29b065406f4b772ed7c9059b8455428bff9aa6e572645cf09743c662`
 before the first identity measurement.
 
-The revised plan contains 8,549 model forwards: 333 preflight, 120 trace
-inertness, 3,552 legacy crossover, 624 noise floor, 48 snapshot/restore, 96
-reference continuation generation, 1,728 main calibration and 2,048 for the
-64-frame cached-versus-recompute probe. The historical short-shape sensitivity
-projection is 7.31 hours; the real post-preflight estimate supersedes it and
-remains informational.
+The revised v3 plan contains 9,669 model forwards: 333 preflight, 144 trace
+inertness, 3,872 legacy crossover, 752 noise floor, 64 snapshot/restore, 96
+reference continuation generation, 2,104 main calibration and 2,304 for the
+64-frame cached-versus-recompute probe. Relative to the v2 plan (8,549), the
+increase is entirely warmup coverage and measured-then-discarded burn-in; the
+admitted evidence per case is unchanged. The historical short-shape
+sensitivity projection is 8.27 hours; the real post-preflight estimate
+supersedes it and remains informational.
 
 No numerical tolerance is proposed in this ADR. `tolerances.json` will be
 created only by the final A40 calibration campaign.
@@ -206,8 +244,20 @@ created only by the final A40 calibration campaign.
 - Existing baseline: `EXP-0008`, ADR-0004, and step-1 diagnostic reports.
 - A40 schedule matrix r6: six complete configurations, no OOM; alternating
   RR/NN/RN controls stable over the recorded repetitions.
+- A40 schedule matrix r5: `first_changed_repetition=1` and
+  `last_two_exact=true` in all three sequential configurations — the
+  transition sits between repetitions 0 and 1 of each warmup+measure block.
 - A40 balanced crossover r2: 1,536/1,536 same-slot endpoint comparisons exact;
   336/384 raw ordinal groups changed; diagnostic status `COMPLETE`.
+- Campaign run `a40-2026-08-26-r1` (commit f779407): FAIL at
+  `legacy__audit_echo`; the 19 failing matched contrasts all involved the
+  first measured pair of the process (RR round 0, ordinals 96–127); rounds
+  1–3 exact 100%; runner companions exact 128/128; no memory anomaly
+  (34.55 GiB allocated, constant). See
+  `reports/step2_a40_run_2026-08-26_diagnostic.md`.
+- Weight-free burn-in control: `tests/test_burn_in.py` replays the exact
+  failure shape against a switching-realization fake — the gate fails without
+  burn-in and passes with it, with the burn-in recorded as evidence.
 - Weight-free seed control: `tests/test_forced_continuation.py`, seeds 101/909,
   same forced continuation, exact logits at every step.
 - Planned calibration experiment: to be allocated before the A40 session.

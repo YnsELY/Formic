@@ -17,11 +17,18 @@ off. Nothing downstream starts before that (plan rule 1).
 > CausalLM loop. ADR-0004 is ACCEPTED by Yanis. SPEC-02 now owns the formal
 > blocking identity gate, measured tolerances, and snapshot/restore primitive.
 > The A40 r2 crossover measured 1,536/1,536 exact same-slot endpoint
-> comparisons while raw process ordinals varied. The official launcher now
-> uses a truthful four-slot Latin ABBA legacy gate, an alternating r6 noise
-> floor, committed backbone-hash verification and explicit cross-path
-> calibration. The 8,549-forward calibration remains to be run; no tolerance
-> or official SPEC-02 PASS exists yet.
+> comparisons while raw process ordinals varied. Campaign run
+> `a40-2026-08-26-r1` (launcher v2) failed at the first legacy case: the
+> first-execution realisation switch extended past the capture-free warmup
+> into the first two measured pair traces (RR round 0, ordinals 96–127) while
+> rounds 1–3 and every runner companion were exact — no memory anomaly, no
+> evidence against wrapper identity
+> (`reports/step2_a40_run_2026-08-26_diagnostic.md`). Protocol v3 therefore
+> adds measured-then-discarded burn-in after every non-empty warmup block,
+> per-endpoint warmups, a truly logits-only 64-frame probe and an RR-floored
+> snapshot adjudication. The 9,669-forward v3 calibration remains to be run
+> (runbook: `docs/runbooks/step2_pod_campaign.md`); no tolerance or official
+> SPEC-02 PASS exists yet.
 
 Reference documents, in order of authority: the checkpoint audit
 (`/workspace/audits/qwen3_8_27b/`) → `FINAL_TARGET_ARCHITECTURE.md` (CAPE-R) →

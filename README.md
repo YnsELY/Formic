@@ -288,8 +288,16 @@ SPEC-01 (the first step of Part 1) is complete at 9/9.
 SPEC-02, which turns that preliminary evidence into a blocking identity gate
 and adds measured tolerances plus snapshot/restore, is in progress. The local
 implementation and the one-process A40 campaign launcher are complete. The
-launcher has been adapted to the r6 schedule matrix and r2 balanced crossover;
-the final A40 tolerance calibration has not yet run.
+launcher has been adapted to the r6 schedule matrix and r2 balanced crossover.
+Campaign run `a40-2026-08-26-r1` (launcher v2) failed at the first legacy
+case: the documented first-execution realisation switch extended past the
+capture-free warmup into the first two measured pair traces, while rounds 1–3
+and every runner companion stayed exact
+([diagnostic](reports/step2_a40_run_2026-08-26_diagnostic.md)). Protocol v3
+(`SPEC-02-h8-option-b-balanced-v3`) therefore adds measured-then-discarded
+burn-in after every non-empty warmup block, per-endpoint warmups, a truly
+logits-only 64-frame probe and an RR-floored snapshot adjudication; the final
+A40 tolerance calibration has not yet run.
 
 SPEC-02 is currently pinned to the following protocol:
 
@@ -305,6 +313,10 @@ SPEC-02 is currently pinned to the following protocol:
 - the A40 session is one model process and one full checkpoint load;
 - the exact legacy gate rotates RR/NN/RN/NR through all four Latin ABBA slots;
 - the logits noise floor uses the stable alternating r6 calendar;
+- after every non-empty warmup block, a measured-then-discarded burn-in runs
+  on the exact measured path (4 pair traces for the paired gates, 1 repetition
+  for cross-path cases) and is recorded as non-blocking evidence; warmups use
+  one ledger per endpoint;
 - the loaded backbone must match the committed 851-tensor content hash and the
   default A40 placement cap is 35 GiB;
 - the preflight reports load time, per-post duration estimates, and total
@@ -387,11 +399,13 @@ python scripts/step1_acceptance.py --stage all
 ```
 
 The final A40 calibration is launched only from a clean pod checkout with the
-checkpoint mounted at `/workspace/Qwen3.8-27B` and one visible NVIDIA A40. It
-loads the model exactly once, runs the preflight first, displays the measured
-estimate, and then continues automatically. The current audited plan contains
-8,549 forwards; the historical short-shape projection is 7.31 hours, while the
-measured post-preflight estimate is authoritative for the current pod:
+checkpoint mounted at `/workspace/Qwen3.8-27B` and one visible NVIDIA A40
+(operating procedure: [`docs/runbooks/step2_pod_campaign.md`](docs/runbooks/step2_pod_campaign.md)).
+It loads the model exactly once, runs the preflight first, displays the
+measured estimate, and then continues automatically. The current audited v3
+plan contains 9,669 forwards; the historical short-shape projection is 8.27
+hours, while the measured post-preflight estimate is authoritative for the
+current pod:
 
 ```bash
 python scripts/step2_a40_campaign.py \

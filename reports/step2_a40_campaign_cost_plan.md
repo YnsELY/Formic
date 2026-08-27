@@ -1,22 +1,31 @@
-# SPEC-02 — Plan final consolidé de la session A40
+# SPEC-02 — Plan final consolidé de la session A40 (protocole v3)
 
-**État : plan révisé après les diagnostics A40 r3–r6 et le crossover équilibré
-r2. Le preflight affiche une estimation et la session enchaîne automatiquement,
-sans plafond horaire ni coupe-circuit budgétaire.**
+**État : plan révisé après les diagnostics A40 r3–r6, le crossover équilibré
+r2 et le run `a40-2026-08-26-r1`
+(`reports/step2_a40_run_2026-08-26_diagnostic.md`). Le preflight affiche une
+estimation et la session enchaîne automatiquement, sans plafond horaire ni
+coupe-circuit budgétaire.**
 
 ## Décisions verrouillées
 
 - Option B : calibration et gate CI sur **8 frames** de décodage.
 - Deux prompts par classe pour les prefills ; un prompt épinglé par classe pour
   les chemins de décodage.
-- Sonde d'accumulation obligatoire : **64 frames**, logits seulement,
-  `short_error_assertion` et `medium_cache_regression`.
+- Sonde d'accumulation obligatoire : **64 frames**, logits seulement — profil
+  de capture logits-only de bout en bout, `short_error_assertion` et
+  `medium_cache_regression`.
 - Recalcul complet absent en classe longue ; segmentations longues limitées à
   médiane et quarts.
 - Trois répétitions pour construire une tolérance ; deux mesures exactes pour
   les gates qui ne construisent pas de tolérance.
-- Six chauffes par ensemble de formes exactes et par processus, jamais de
-  capture d'état pendant une chauffe.
+- Six chauffes par ensemble de formes exactes et par processus, **un registre
+  de chauffes par endpoint**, jamais de capture d'état pendant une chauffe.
+- **Burn-in mesuré-jeté après chaque bloc de chauffe non vide** : 4
+  paires-traces sur le chemin de mesure exact pour les gates par paires, 1
+  répétition pour les mesures cross-path, l'inertie de trace et
+  snapshot/restore ; enregistré dans l'artefact, exclu de tout critère
+  bloquant et des statistiques de tolérance (fenêtre transitoire observée :
+  2 paires-traces ; marge ×2).
 - Écriture atomique après chaque cas ; reprise uniquement à hashes de protocole
   identiques.
 - Identité wrapper : gate ABBA à quatre traitements RR/NN/RN/NR, stabilité des
@@ -51,19 +60,22 @@ L'« équivalent EXP-0008 » applique seulement l'ancre historique
 la durée prévue de la classe ; après le preflight, cette colonne est remplacée
 par les chronométrages réels.
 
+Les forwards incluent les chauffes par endpoint et le burn-in mesuré-jeté ;
+l'évidence admise par cas est inchangée par rapport au plan v2.
+
 | Ordre | Poste | Forwards | Transfert mesuré | Équiv. historique | Durée après preflight théorique |
 |---:|---|---:|---:|---:|---|
 | 1 | Preflight : 18 candidats + 12 références distinctes, 1 dry + 2 chronométrés | 333 | 0 | 0,28 h | `T_preflight` observé |
-| 2 | Gate d'inertie du traceur, corpus complet | 120 | 2,81 GiB | 0,10 h | `E_trace` |
-| 3 | Continuité legacy exacte, Latin ABBA horizon 8 | 3 552 | 1,42 GiB | 3,04 h | `E_legacy` |
-| 4 | Plancher alterné RR/NN/RN, 3 prompts, horizon 8 | 624 | 0,20 GiB | 0,53 h | `E_noise` |
-| 5 | Snapshot/restore réel, continuité horizon 8 | 48 | 3,61 GiB | 0,04 h | `E_snapshot` |
+| 2 | Gate d'inertie du traceur, corpus complet | 144 | 4,22 GiB | 0,12 h | `E_trace` |
+| 3 | Continuité legacy exacte, Latin ABBA horizon 8 | 3 872 | 1,57 GiB | 3,31 h | `E_legacy` |
+| 4 | Plancher alterné RR/NN/RN, 3 prompts, horizon 8 | 752 | 0,26 GiB | 0,64 h | `E_noise` |
+| 5 | Snapshot/restore réel, continuité horizon 8 | 64 | 4,81 GiB | 0,05 h | `E_snapshot` |
 | 6 | Continuations de référence, greedy + 3 seeds | 96 | négligeable | 0,08 h | `E_continuations` |
-| 7 | Classe courte | 672 | 14,75 GiB | 0,57 h | `E_short` |
-| 8 | Classe moyenne | 672 | 27,94 GiB | 0,57 h | `E_medium` |
-| 9 | Classe longue | 384 | 14,49 GiB | 0,33 h | `E_long` |
-| 10 | Sonde cached/recalcul 64, court + moyen | 2 048 | 0,24 GiB | 1,75 h | `E_probe64` |
-| | **Total** | **8 549** | **65,47 GiB** | **7,31 h non calibrées** | `T_preflight + ΣE` |
+| 7 | Classe courte | 808 | 18,93 GiB | 0,69 h | `E_short` |
+| 8 | Classe moyenne | 808 | 35,23 GiB | 0,69 h | `E_medium` |
+| 9 | Classe longue | 488 | 18,87 GiB | 0,42 h | `E_long` |
+| 10 | Sonde cached/recalcul 64, court + moyen | 2 304 | 0,36 GiB | 1,97 h | `E_probe64` |
+| | **Total** | **9 669** | **84,24 GiB** | **8,27 h non calibrées** | `T_preflight + ΣE` |
 
 Le preflight couvre les chemins candidats et leurs références canoniques
 distinctes, capture désactivée :
@@ -85,27 +97,30 @@ globale de 30 %.
 
 ## Détail de la calibration principale
 
+Forwards par cas = chauffes des deux endpoints + burn-in jeté + mesures ; les
+transferts comptent le burn-in (capture réelle).
+
 | Classe | Chemin | Segment | Formes exactes | Forwards | Transfert |
 |---|---|---|---|---:|---:|
-| court | prefill | complet | `26`; `25` | 24 | 0,96 GiB |
-| court | prefill | précoce | `1/25`; `1/24` | 72 | 1,86 GiB |
-| court | prefill | médiane | `13/13`; `12/13` | 72 | 1,88 GiB |
-| court | prefill | tardive | `25/1`; `24/1` | 72 | 1,90 GiB |
-| court | prefill | quarts | `7/7/7/5`; `7/7/7/4` | 144 | 3,71 GiB |
-| court | decode cached | — | `26 + 7×1` vs `26…33` | 144 | 3,94 GiB |
-| court | decode recompute | — | `26…33` | 144 | 0,50 GiB |
-| moyen | prefill | complet | `310`; `331` | 24 | 1,75 GiB |
-| moyen | prefill | précoce | `1/309`; `1/330` | 72 | 2,65 GiB |
-| moyen | prefill | médiane | `155/155`; `165/166` | 72 | 2,92 GiB |
-| moyen | prefill | tardive | `309/1`; `330/1` | 72 | 3,19 GiB |
-| moyen | prefill | quarts | `78/78/78/76`; `83/83/83/82` | 144 | 5,25 GiB |
-| moyen | decode cached | — | `310 + 7×1` vs `310…317` | 144 | 7,26 GiB |
-| moyen | decode recompute | — | `310…317` | 144 | 4,92 GiB |
-| long | prefill | complet | `2 437`; `2 542` | 24 | 2,72 GiB |
-| long | prefill | médiane | `1 218/1 219`; `1 271/1 271` | 72 | 3,62 GiB |
-| long | prefill | quarts | `610/610/610/607`; `636/636/636/634` | 144 | 5,43 GiB |
-| long | decode cached | — | `2 437 + 7×1` | 144 | 2,72 GiB |
-| | **Total calibration** | | | **1 728** | **57,19 GiB** |
+| court | prefill | complet | `26`; `25` | 40 | 1,28 GiB |
+| court | prefill | précoce | `1/25`; `1/24` | 80 | 2,48 GiB |
+| court | prefill | médiane | `13/13`; `12/13` | 80 | 2,50 GiB |
+| court | prefill | tardive | `25/1`; `24/1` | 80 | 2,53 GiB |
+| court | prefill | quarts | `7/7/7/5`; `7/7/7/4` | 160 | 4,95 GiB |
+| court | decode cached | — | `26 + 7×1` vs `26…33` | 160 | 4,60 GiB |
+| court | decode recompute | — | `26…33` | 208 | 0,59 GiB |
+| moyen | prefill | complet | `310`; `331` | 40 | 2,34 GiB |
+| moyen | prefill | précoce | `1/309`; `1/330` | 80 | 3,53 GiB |
+| moyen | prefill | médiane | `155/155`; `165/166` | 80 | 3,89 GiB |
+| moyen | prefill | tardive | `309/1`; `330/1` | 80 | 4,25 GiB |
+| moyen | prefill | quarts | `78/78/78/76`; `83/83/83/82` | 160 | 7,01 GiB |
+| moyen | decode cached | — | `310 + 7×1` vs `310…317` | 160 | 8,47 GiB |
+| moyen | decode recompute | — | `310…317` | 208 | 5,74 GiB |
+| long | prefill | complet | `2 437`; `2 542` | 40 | 3,62 GiB |
+| long | prefill | médiane | `1 218/1 219`; `1 271/1 271` | 80 | 4,83 GiB |
+| long | prefill | quarts | `610/610/610/607`; `636/636/636/634` | 160 | 7,24 GiB |
+| long | decode cached | — | `2 437 + 7×1` | 208 | 3,18 GiB |
+| | **Total calibration** | | | **2 104** | **73,03 GiB** |
 
 ## Estimation automatique après preflight
 
@@ -161,7 +176,13 @@ introduisent les longueurs `n+7` à `n+62`, qui sont des formes d'entrée/cache
 distinctes et peuvent sélectionner un autre chemin backend. Les réduire à 8
 retirerait donc la stabilisation requise avant les deux mesures retenues.
 
+Chaque bloc de chauffe non vide est suivi de son burn-in mesuré-jeté (voir
+« Décisions verrouillées ») avant la première trace admise ; l'évidence du
+burn-in reste dans l'artefact sous `burn_in` et n'entre dans aucun critère.
+
 Chaque manifeste de reprise épingle commit, config, corpus, tokenizer,
 backbone, protocole et futur hash de `tolerances.json`. Après interruption, les
 cas terminés restent valides ; un nouveau processus refait ses chauffes sans
-capturer d'état.
+capturer d'état, puis leurs burn-ins. Le passage au protocole v3 change le hash
+de config résolue : les runs antérieurs ne sont pas reprenables, la prochaine
+session exige un nouveau run-id.
