@@ -35,10 +35,11 @@ def main() -> int:
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
 
-    # Importing torch is intentionally deferred until the resolved numerical
-    # environment has been read and pinned.
     from formic.config.loader import load_config
-    from formic.science.determinism import prepare_backend_environment
+    from formic.science.determinism import (
+        configure_determinism,
+        prepare_backend_environment,
+    )
 
     config = load_config(args.config)
     config = replace(
@@ -49,6 +50,12 @@ def main() -> int:
         ),
     )
     prepare_backend_environment(config.numerics)
+    # Apply the pinned numerical policy immediately so the environment report
+    # written into run_metadata.json reflects the flags the measurements
+    # actually use.  Run a40-2026-08-27-r1 recorded torch defaults because the
+    # report was produced before load_backbone applied the policy; execution
+    # itself was always conformant (load_backbone re-applies it).
+    configure_determinism(config.run.seed, config.run.deterministic, config.numerics)
     from formic.science.identity.campaign import run_gpu_campaign
 
     try:

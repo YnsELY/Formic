@@ -156,9 +156,12 @@ faire une promesse pour le pod courant.
    chacun des quatre slots de configuration ; les contrastes référence/runner
    doivent être exacts et leurs deux signatures mesurées identiques.
 3. Le plancher de bruit utilise le calendrier alterné r6 et conserve RR et NN
-   comme contrôles bruts, logits
-   seulement. Le maximum RR est propagé dans chaque ligne logits candidate et
-   interdit une tolérance plus serrée que la référence.
+   comme contrôles bruts, logits seulement. Le maximum RR est propagé dans
+   chaque ligne logits candidate et interdit une tolérance plus serrée que la
+   référence. L'assertion last-two bloquante porte sur RR et NN (les paires
+   qui produisent le plancher) ; la paire mixte RN reste mesurée mais est un
+   diagnostic non bloquant (oscillation de période 2 mesurée par
+   `a40-2026-08-27-r1`).
 4. Snapshot/restore capture `audit_echo` en continu et via snapshot à mi-chemin.
    Les métriques brutes sont écrites avant les classes ; après création des
    tolérances, elles sont adjudicées sans nouveau forward. Instabilité ou erreur

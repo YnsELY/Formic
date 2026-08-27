@@ -291,13 +291,19 @@ implementation and the one-process A40 campaign launcher are complete. The
 launcher has been adapted to the r6 schedule matrix and r2 balanced crossover.
 Campaign run `a40-2026-08-26-r1` (launcher v2) failed at the first legacy
 case: the documented first-execution realisation switch extended past the
-capture-free warmup into the first two measured pair traces, while rounds 1–3
-and every runner companion stayed exact
+capture-free warmup into the first two measured pair traces
 ([diagnostic](reports/step2_a40_run_2026-08-26_diagnostic.md)). Protocol v3
-(`SPEC-02-h8-option-b-balanced-v3`) therefore adds measured-then-discarded
-burn-in after every non-empty warmup block, per-endpoint warmups, a truly
-logits-only 64-frame probe and an RR-floored snapshot adjudication; the final
-A40 tolerance calibration has not yet run.
+(`SPEC-02-h8-option-b-balanced-v3`) added measured-then-discarded burn-in
+after every non-empty warmup block, per-endpoint warmups, a truly logits-only
+64-frame probe and an RR-floored snapshot adjudication. Run
+`a40-2026-08-27-r1` then passed the legacy gate 6/6 for the first time and
+failed at the noise floor on the mixed reference/runner pair, which
+oscillates with period 2 under the alternating calendar while the
+floor-producing RR/NN pairs were stable
+([diagnostic](reports/step2_a40_run_2026-08-27_diagnostic.md)); the blocking
+last-two assertion now applies to RR/NN only and the mixed pair is a
+recorded non-blocking diagnostic. The final A40 tolerance calibration has
+not yet completed.
 
 SPEC-02 is currently pinned to the following protocol:
 

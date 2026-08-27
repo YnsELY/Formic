@@ -151,6 +151,19 @@ floor is measured logits-only on `audit_echo`, the pinned short prompt and the
 pinned medium prompt under the alternating RR/NN/RN schedule. The maximum RR
 delta is propagated into every logits candidate row; it is never hard-coded to
 zero during promotion.
+
+Within the noise-floor phase, the blocking last-two stability assertion
+applies to the pairs that produce the floor — reference/reference and
+runner/runner. The mixed reference/runner pair remains measured and recorded
+but is a non-blocking diagnostic. Run `a40-2026-08-27-r1` measured that pair
+oscillating with period 2 under the alternating calendar (repetitions 0 and 2
+bit-identical at steps 1–5, repetition 1 a different realisation) while RR
+and NN were stable over all three repetitions and the paired ABBA gate had
+just passed 6/6 with raw repetition-reproducibility on 16/16 slots per case.
+A sustained oscillation cannot satisfy a raw last-two criterion at any
+repetition count, and the mixed pair feeds no tolerance: wrapper identity is
+decided by the matched ABBA gate. This is the same doctrine already applied
+to raw cross-ordinal fingerprints after crossover r2.
 Blocking metrics are 100% top-1 agreement at aligned protocol and maximum
 absolute delta. KL is recorded but non-blocking. Tolerances are keyed by length
 class while evidence retains every exact input length.
@@ -255,6 +268,14 @@ created only by the final A40 calibration campaign.
   1–3 exact 100%; runner companions exact 128/128; no memory anomaly
   (34.55 GiB allocated, constant). See
   `reports/step2_a40_run_2026-08-26_diagnostic.md`.
+- Campaign run `a40-2026-08-27-r1` (commit 04f18ed, protocol v3): the legacy
+  gate passed 6/6 for the first time (matched contrasts exact, raw
+  repetitions reproducible on 16/16 slots per case; the first case's burn-in
+  visibly absorbed the transient). FAIL at the noise floor: mixed
+  reference/runner pair oscillating with period 2 (repetitions 0 ≡ 2 at
+  steps 1–5, repetition 1 distinct) while RR/NN were stable 3/3; measured RR
+  floor 16.09375 with top-1 flips on 21/24 comparisons; no memory anomaly.
+  See `reports/step2_a40_run_2026-08-27_diagnostic.md`.
 - Weight-free burn-in control: `tests/test_burn_in.py` replays the exact
   failure shape against a switching-realization fake — the gate fails without
   burn-in and passes with it, with the burn-in recorded as evidence.

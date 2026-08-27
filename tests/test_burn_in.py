@@ -230,8 +230,139 @@ def test_noise_floor_burn_in_protects_the_last_two_assertion(monkeypatch):
         burn_in_pair_traces=4,
     )
     assert payload["last_two_pair_traces_exact"] is True
-    assert payload["protocol"] == "SPEC-02-alternating-noise-floor-h8-v2"
+    assert payload["protocol"] == "SPEC-02-alternating-noise-floor-h8-v3"
     assert payload["burn_in"]["executed_pair_traces"] == 4
+
+
+class _OscillatingPair:
+    """Fake ``run_schedule_pair`` reproducing the a40-2026-08-27-r1 pattern.
+
+    The selected (left, right) endpoint pair alternates between two
+    realisations on every captured pair trace — a sustained period-2
+    oscillation, not a transient — while every other pair is stable.
+    """
+
+    def __init__(self, oscillating: tuple[str, str]) -> None:
+        self.oscillating = oscillating
+        self.captured_by_pair: dict[tuple[str, str], int] = {}
+
+    def __call__(
+        self,
+        calendar,
+        left,
+        right,
+        *,
+        prompt_token_ids,
+        forced_token_ids,
+        capture,
+        cpu_logits_observer=None,
+        **_kwargs,
+    ):
+        if not capture:
+            return None
+        key = (left.name, right.name)
+        count = self.captured_by_pair.get(key, 0)
+        self.captured_by_pair[key] = count + 1
+        realization = count % 2 if key == self.oscillating else 0
+        steps = []
+        for step in range(len(forced_token_ids)):
+            records = {}
+            for within_step, side in enumerate(("left", "right")):
+                endpoint = left if side == "left" else right
+                metadata = {
+                    "calendar": calendar,
+                    "endpoint": endpoint.name,
+                    "side": side,
+                    "decode_step": step,
+                    "step": step,
+                    "pair_local_forward_ordinal": 2 * step + within_step,
+                    "within_step_ordinal": within_step,
+                }
+                logits = torch.tensor([float(realization), 1.0 + float(realization)])
+                if cpu_logits_observer is not None:
+                    cpu_logits_observer(dict(metadata), logits)
+                records[side] = {
+                    **metadata,
+                    "sha256": f"{key[0]}-{key[1]}-r{realization}",
+                    "top1": 1,
+                }
+            steps.append(
+                {
+                    "step": step,
+                    "point": "logits",
+                    "left": records["left"],
+                    "right": records["right"],
+                    "comparison": {
+                        "max_abs_delta": 0.0,
+                        "kl_next_token": 0.0,
+                        "left_top1": 1,
+                        "right_top1": 1,
+                        "top1_agreement": True,
+                        "exact": True,
+                        "first_coordinate": None,
+                        "left_value": None,
+                        "right_value": None,
+                    },
+                }
+            )
+        return {
+            "left_path_fingerprint": f"{key[0]}-{key[1]}-left-r{realization}",
+            "right_path_fingerprint": f"{key[0]}-{key[1]}-right-r{realization}",
+            "steps": steps,
+            "cache_independence": {
+                "cache_objects_distinct": True,
+                "cache_storage_disjoint": True,
+            },
+            "autograd_disabled_all_forwards": True,
+        }
+
+
+def test_noise_floor_mixed_pair_oscillation_is_diagnostic_only(monkeypatch):
+    """The measured RN period-2 oscillation must not block the floor pairs."""
+    monkeypatch.setattr(
+        balanced_gate, "run_schedule_pair", _OscillatingPair(("reference", "runner"))
+    )
+    reference, runner = _endpoints()
+    payload = run_alternating_noise_floor(
+        reference,
+        runner,
+        prompt_token_ids=(1, 2, 3, 4),
+        forced_token_ids=HORIZON_8,
+        repetitions=3,
+        warmup_pair_traces=6,
+        burn_in_pair_traces=4,
+    )
+
+    assert payload["protocol"] == "SPEC-02-alternating-noise-floor-h8-v3"
+    assert payload["blocking_pairs"] == ["reference_reference", "runner_runner"]
+    assert payload["mixed_pair_stability_is_diagnostic_only"] is True
+    assert payload["last_two_pair_traces_exact"] is True
+    assert payload["pair_stability"]["reference_reference"] is True
+    assert payload["pair_stability"]["runner_runner"] is True
+    # The oscillation stays visible in the recorded evidence.
+    assert payload["pair_stability"]["reference_runner"] is False
+    # The floor itself only ever contains the blocking pairs.
+    assert {item["pair"] for item in payload["raw_control_floor"]} == {
+        "reference_reference",
+        "runner_runner",
+    }
+
+
+def test_noise_floor_still_blocks_on_an_unstable_floor_pair(monkeypatch):
+    monkeypatch.setattr(
+        balanced_gate, "run_schedule_pair", _OscillatingPair(("runner", "runner"))
+    )
+    reference, runner = _endpoints()
+    with pytest.raises(RuntimeError, match="noise-floor last two traces are unstable"):
+        run_alternating_noise_floor(
+            reference,
+            runner,
+            prompt_token_ids=(1, 2, 3, 4),
+            forced_token_ids=HORIZON_8,
+            repetitions=3,
+            warmup_pair_traces=6,
+            burn_in_pair_traces=4,
+        )
 
 
 def _toy_session(warmups_per_shape: int = 1) -> _MeasurementSession:

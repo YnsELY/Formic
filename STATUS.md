@@ -20,15 +20,23 @@ off. Nothing downstream starts before that (plan rule 1).
 > comparisons while raw process ordinals varied. Campaign run
 > `a40-2026-08-26-r1` (launcher v2) failed at the first legacy case: the
 > first-execution realisation switch extended past the capture-free warmup
-> into the first two measured pair traces (RR round 0, ordinals 96–127) while
-> rounds 1–3 and every runner companion were exact — no memory anomaly, no
-> evidence against wrapper identity
-> (`reports/step2_a40_run_2026-08-26_diagnostic.md`). Protocol v3 therefore
-> adds measured-then-discarded burn-in after every non-empty warmup block,
-> per-endpoint warmups, a truly logits-only 64-frame probe and an RR-floored
-> snapshot adjudication. The 9,669-forward v3 calibration remains to be run
-> (runbook: `docs/runbooks/step2_pod_campaign.md`); no tolerance or official
-> SPEC-02 PASS exists yet.
+> into the first two measured pair traces
+> (`reports/step2_a40_run_2026-08-26_diagnostic.md`). Protocol v3 (burn-in
+> after every non-empty warmup block, per-endpoint warmups, logits-only
+> 64-frame probe, RR-floored snapshot adjudication) fixed it: run
+> `a40-2026-08-27-r1` passed the legacy gate 6/6 with raw
+> repetition-reproducibility on every slot, then failed at the noise floor on
+> the mixed reference/runner pair, which oscillates with period 2 under the
+> alternating calendar while RR/NN — the pairs that produce the floor — were
+> stable 3/3 (`reports/step2_a40_run_2026-08-27_diagnostic.md`). The blocking
+> last-two assertion now applies to RR/NN only; the mixed pair is a recorded
+> non-blocking diagnostic. Measured RR floor: 16.09 with top-1 flips —
+> cross-position comparisons downstream (cross-path calibration, snapshot
+> adjudication) may therefore fail the hard top-1 verdict; the explicit
+> decision is to rerun and measure everything before amending any criterion.
+> The 9,669-forward v3 calibration remains to be rerun (runbook:
+> `docs/runbooks/step2_pod_campaign.md`); no tolerance or official SPEC-02
+> PASS exists yet.
 
 Reference documents, in order of authority: the checkpoint audit
 (`/workspace/audits/qwen3_8_27b/`) → `FINAL_TARGET_ARCHITECTURE.md` (CAPE-R) →

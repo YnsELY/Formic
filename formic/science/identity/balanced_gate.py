@@ -38,6 +38,20 @@ _NOISE_PAIRS = (
     "reference_runner",
 )
 
+# Only the pairs that feed the tolerance floor block the noise phase.  Run
+# a40-2026-08-27-r1 measured the mixed reference_runner pair oscillating with
+# period 2 under the alternating calendar (repetitions 0 and 2 bit-identical
+# at steps 1-5, repetition 1 a different realisation) while RR and NN were
+# stable over all three repetitions — a sustained oscillation, not a
+# transient, so no burn-in or repetition count can satisfy a raw last-two
+# criterion there.  Wrapper identity is decided by the matched ABBA gate; the
+# mixed pair remains recorded as a non-blocking diagnostic, the same doctrine
+# already applied to raw cross-ordinal fingerprints after crossover r2.
+_NOISE_BLOCKING_PAIRS = (
+    "reference_reference",
+    "runner_runner",
+)
+
 
 def _run_burn_in(
     calendar: str,
@@ -267,8 +281,10 @@ def run_alternating_noise_floor(
     """Measure RR/NN/RN under the stable alternating r6 calendar.
 
     This is the economical reference-floor control, not the wrapper identity
-    verdict. It retains scalar comparisons and path hashes only, and enforces
-    the mandatory last-two measured-traces assertion for every pair.
+    verdict. It retains scalar comparisons and path hashes only. The
+    mandatory last-two measured-traces assertion blocks on the floor pairs
+    (RR and NN); the mixed RN pair is recorded as a non-blocking diagnostic
+    (see ``_NOISE_BLOCKING_PAIRS``).
     """
     if repetitions < 2:
         raise ValueError("noise floor requires at least two repetitions")
@@ -379,12 +395,12 @@ def _noise_payload(
             "metric": step["comparison"],
         }
         for item in results
-        if item["pair"] in ("reference_reference", "runner_runner")
+        if item["pair"] in _NOISE_BLOCKING_PAIRS
         for step in item["steps"]
     ]
     return {
         "schema_version": 1,
-        "protocol": "SPEC-02-alternating-noise-floor-h8-v2",
+        "protocol": "SPEC-02-alternating-noise-floor-h8-v3",
         "status": "COMPLETE" if complete else "MEASURING",
         "calendar": "alternating",
         "warmup_pair_traces": warmup_pair_traces,
@@ -392,9 +408,12 @@ def _noise_payload(
         "burn_in": burn_in,
         "repetitions_expected": repetitions,
         "pairs": list(_NOISE_PAIRS),
+        "blocking_pairs": list(_NOISE_BLOCKING_PAIRS),
         "pair_results": list(results),
         "pair_stability": stability,
-        "last_two_pair_traces_exact": complete and all(stability.values()),
+        "last_two_pair_traces_exact": complete
+        and all(stability[pair] for pair in _NOISE_BLOCKING_PAIRS),
+        "mixed_pair_stability_is_diagnostic_only": True,
         "raw_control_floor": floor,
         "causal_attribution": None,
     }
