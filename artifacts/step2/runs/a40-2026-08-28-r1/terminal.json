@@ -1,0 +1,1 @@
+{"exception":"InvalidMeasurement","finished_at":"2026-08-28T15:34:12.864411Z","message":"last two measured traces are unstable: calibration__medium_cache_regression__decode_cached__none__greedy; first_changed_repetition=1; changed_side=candidate","pod_action_required":null,"schema_version":1,"status":"FAIL"}
