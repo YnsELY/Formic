@@ -1,0 +1,1 @@
+{"case_id":"calibration__long_resume_incidents__prefill_segmented__median","failure":{"exception":"TraceStructureError","message":"model-attached state registry differs"},"phase":"long","schema_version":1,"status":"FAILED"}
