@@ -49,6 +49,10 @@ python scripts/step2_a40_campaign.py \
   verdict candidat) sont écrits avant la sonde 64 ; les gates finales sont
   jugées ensemble en fin de session. Un `FAIL` terminal peut donc être un
   résultat complet et informatif : rapporte et pousse tout dans tous les cas.
+- Les désaccords top-1 des comparaisons cross-chemin sont désormais comptés et
+  rapportés (`top1_disagreements`) au lieu de faire échouer le run : c'est une
+  propriété mesurée du backend entre deux chemins, pas un défaut. Les lignes
+  de tolérance concernées restent `REVIEW_REQUIRED` pour la revue humaine.
 - Le lanceur n'arrête jamais le pod et ne demande pas de l'arrêter.
 
 ## 4. Reprise après un FAIL

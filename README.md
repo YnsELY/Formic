@@ -302,8 +302,16 @@ oscillates with period 2 under the alternating calendar while the
 floor-producing RR/NN pairs were stable
 ([diagnostic](reports/step2_a40_run_2026-08-27_diagnostic.md)); the blocking
 last-two assertion now applies to RR/NN only and the mixed pair is a
-recorded non-blocking diagnostic. The final A40 tolerance calibration has
-not yet completed.
+recorded non-blocking diagnostic. Run `a40-2026-08-28-r1` completed seven
+phases — including snapshot/restore on the real checkpoint and the whole
+short class — before failing on medium cached decode
+([diagnostic](reports/step2_a40_run_2026-08-28_diagnostic.md)). Protocol v4
+anchors tolerance-measurement stability on the canonical reference (the
+candidate's variability is what the three repetitions and the 2x margin
+quantify) and counts cross-position top-1 flips rather than failing on them;
+both criteria stay blocking where the protocol is aligned, and every affected
+tolerance row remains bounded/REVIEW_REQUIRED. The final A40 tolerance
+calibration has not yet completed.
 
 SPEC-02 is currently pinned to the following protocol:
 

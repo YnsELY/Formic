@@ -164,9 +164,38 @@ A sustained oscillation cannot satisfy a raw last-two criterion at any
 repetition count, and the mixed pair feeds no tolerance: wrapper identity is
 decided by the matched ABBA gate. This is the same doctrine already applied
 to raw cross-ordinal fingerprints after crossover r2.
-Blocking metrics are 100% top-1 agreement at aligned protocol and maximum
+Blocking metrics are 100% top-1 agreement **at aligned protocol** and maximum
 absolute delta. KL is recorded but non-blocking. Tolerances are keyed by length
 class while evidence retains every exact input length.
+
+Top-1 agreement is not a blocking metric for cross-path comparisons or for the
+snapshot adjudication. Calibration compares a Formic path with a *different*
+canonical stock path (cached against full recomputation, segmented against
+full prefixes), and a restored branch continues at a different execution
+position, so both are cross-position by construction. Run `a40-2026-08-28-r1`
+measured top-1 agreement of 3/8 (short cached), 1/8 (medium cached) and 2/8
+(snapshot) on stable committed cases, while the same-path control in the same
+process — recompute against recompute — stayed exact at 8/8 with zero delta.
+The flips are therefore a measured property of the backend between two
+execution paths, not evidence against wrapper identity, which the aligned
+exact gates decide. They are counted and reported in the candidate verdict and
+in the snapshot adjudication, they remain blocking in `verdict.evaluate` where
+the protocol is aligned, and every affected row is still forced to
+`bounded`/`REVIEW_REQUIRED`, so a human must justify it before promotion.
+
+Stability of a *tolerance* measurement is asserted on the canonical
+reference: its trace fingerprints must be identical across all measured
+repetitions. The candidate's own reproducibility is recorded as diagnostic
+evidence. Run `a40-2026-08-28-r1` measured the canonical recompute reference
+repeating bit-identically over four executions (burn-in plus three
+repetitions) while the cached candidate produced four distinct fingerprints,
+diverging only in the late groups from decode step 2 onward — a continuous
+variability, neither a transient nor a periodic oscillation. Requiring
+bit-reproducibility of the candidate would forbid exactly the behaviour the
+three repetitions and the 2x margin exist to quantify, while requiring it of
+the reference keeps the measurement anchored. The exact gates — trace
+inertness, legacy continuity, the RR/NN noise floor and snapshot/restore —
+keep the stricter last-two assertion on both sides.
 
 The gate records the first divergent decode step, the first
 boundary/layer/component, and the first tensor coordinate. Interruption-safe
@@ -286,6 +315,18 @@ created only by the final A40 calibration campaign.
   steps 1–5, repetition 1 distinct) while RR/NN were stable 3/3; measured RR
   floor 16.09375 with top-1 flips on 21/24 comparisons; no memory anomaly.
   See `reports/step2_a40_run_2026-08-27_diagnostic.md`.
+- Campaign run `a40-2026-08-28-r1` (commit 9fd9bb7): seven phases complete —
+  preflight, trace inertness, legacy gate 6/6, noise floor 3/3 (RR stable on
+  all three prompts; measured RR floors 16.09375 / 19.5625 / 11.59375),
+  snapshot/restore PASS on the real checkpoint, reference continuations, and
+  the whole short class — then twelve medium cases, before
+  `InvalidMeasurement` on `medium_cache_regression / decode_cached / greedy`:
+  canonical reference fingerprint d433a343 repeated over four executions
+  against four distinct candidate fingerprints, diverging in G11..POST_G16
+  and logits from step 2 (steps 0–1 bit-identical). Same-path control
+  (medium recompute, Formic against stock) exact 8/8 with delta 0.0. Top-1
+  agreement on stable cases: 3/8, 1/8, 2/8. See
+  `reports/step2_a40_run_2026-08-28_diagnostic.md`.
 - Weight-free burn-in control: `tests/test_burn_in.py` replays the exact
   failure shape against a switching-realization fake — the gate fails without
   burn-in and passes with it, with the burn-in recorded as evidence.

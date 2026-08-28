@@ -20,6 +20,7 @@ from formic.science.identity.campaign import (
     CampaignError,
     _adjudicate_snapshot_candidate,
     _assert_final_gates,
+    _assert_reference_stable,
     _assert_stable,
     _phase_continuations,
     _reference_floor_maximum,
@@ -281,3 +282,68 @@ def test_reference_floor_maximum_extracts_the_rr_maximum():
     ]
     assert _reference_floor_maximum(cases) == 0.5
     assert _reference_floor_maximum([{"prompt_id": "x", "raw_control_floor": []}]) is None
+
+
+def test_reference_stability_is_the_tolerance_criterion():
+    """A tolerance measurement anchors on the reference, not the candidate.
+
+    Run a40-2026-08-28-r1 measured the canonical recompute reference
+    repeating bit-identically over four executions while the cached
+    candidate produced four distinct fingerprints.
+    """
+    varying_candidate = [
+        ("ref", "cand-a"),
+        ("ref", "cand-b"),
+        ("ref", "cand-c"),
+    ]
+    _assert_reference_stable(varying_candidate, "case")
+    # The strict criterion, kept for the exact gates, rejects the same data.
+    with pytest.raises(InvalidMeasurement, match="last two measured traces"):
+        _assert_stable(varying_candidate, "case")
+
+    with pytest.raises(InvalidMeasurement, match="canonical reference traces"):
+        _assert_reference_stable(
+            [("ref-a", "cand"), ("ref-b", "cand"), ("ref-b", "cand")], "case"
+        )
+    with pytest.raises(InvalidMeasurement, match="first_changed_repetition=1"):
+        _assert_reference_stable([("ref-a", "cand"), ("ref-b", "cand")], "case")
+    with pytest.raises(InvalidMeasurement, match="canonical reference traces"):
+        _assert_reference_stable([("ref", "cand")], "case")
+
+
+def test_snapshot_adjudication_records_top1_flips_without_failing():
+    """Interrupted and restored continuations occupy different positions."""
+    snapshot = {
+        "observations": [
+            {
+                "repetition": 0,
+                "comparisons": [
+                    {
+                        "tensor": {"max_abs_delta": 0.25},
+                        "top1_agreement": False,
+                        "reference_top1": 198,
+                        "candidate_top1": 220,
+                    },
+                    {
+                        "tensor": {"max_abs_delta": 0.1},
+                        "top1_agreement": True,
+                        "reference_top1": 198,
+                        "candidate_top1": 198,
+                    },
+                ],
+            }
+        ],
+        "stability": {"last_two_exact": True},
+    }
+
+    result = _adjudicate_snapshot_candidate(snapshot, _candidate(0.5))
+
+    assert result["verdict"] == "CANDIDATE_PASS"
+    assert result["top1_disagreements"]["total"] == 1
+    assert result["top1_disagreements"]["is_blocking"] is False
+    assert result["top1_disagreements"]["observations"][0]["candidate_top1"] == 220
+
+    # The measured delta threshold stays blocking.
+    over_threshold = _adjudicate_snapshot_candidate(snapshot, _candidate(0.125))
+    assert over_threshold["verdict"] == "FAIL"
+    assert over_threshold["first_failure"]["repetition"] == 0

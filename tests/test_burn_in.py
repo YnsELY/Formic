@@ -445,3 +445,103 @@ def test_measure_forced_burn_in_runs_once_after_a_warmup_and_is_excluded():
     assert second["warmup_paths"] == 0
     assert second["burn_in"]["executed"] is False
     assert second["burn_in"]["observations"] == []
+
+
+def test_measure_forced_tolerance_accepts_a_varying_candidate(monkeypatch):
+    """The a40-2026-08-28-r1 shape: stable reference, varying candidate.
+
+    A tolerance measurement must record that variability instead of
+    invalidating itself; the exact gates keep the stricter criterion.
+    """
+    from formic.science.identity import campaign as campaign_module
+
+    session = _toy_session()
+    prompt = SimpleNamespace(id="p", token_ids=(1, 2, 3, 4), length_class="short")
+    path = CampaignPath(prompt, ExecutionMode.DECODE_CACHED)
+    calls = {"n": 0}
+
+    def fake_pair(*_args, **_kwargs):
+        calls["n"] += 1
+        return SimpleNamespace(
+            reference_fingerprint="ref-stable",
+            candidate_fingerprint=f"cand-{calls['n']}",
+            payload=None,
+            captured_state_tensors=0,
+        )
+
+    monkeypatch.setattr(campaign_module, "run_cross_path_pair", fake_pair)
+    monkeypatch.setattr(
+        campaign_module,
+        "_pair_to_observation",
+        lambda pair, **kwargs: {
+            "case_id": kwargs["case_id"],
+            "repetition": kwargs["repetition"],
+            "measurements": [],
+            "reference_fingerprint": pair.reference_fingerprint,
+            "candidate_fingerprint": pair.candidate_fingerprint,
+        },
+    )
+
+    payload = session.measure_forced(
+        case_id="case",
+        phase="medium",
+        path=path,
+        forced_token_ids=(5, 6, 7),
+        repetitions=3,
+        sampling=SamplingMode.GREEDY,
+        continuation_seed=None,
+        exact_required=False,
+        endpoints=None,
+        logits_only=False,
+        decode_steps=3,
+    )
+
+    stability = payload["stability"]
+    assert stability["blocking_criterion"] == "reference_fingerprints_identical"
+    assert stability["reference_fingerprints_identical"] is True
+    assert stability["candidate_stability_is_diagnostic"] is True
+    # The candidate variability stays visible as recorded evidence.
+    assert stability["last_two_exact"] is False
+    assert stability["first_changed_repetition"] == 1
+    assert len(payload["repetitions"]) == 3
+
+
+def test_measure_forced_tolerance_still_requires_a_stable_reference(monkeypatch):
+    from formic.science.identity import campaign as campaign_module
+    from formic.science.identity.protocol import InvalidMeasurement
+
+    session = _toy_session()
+    prompt = SimpleNamespace(id="p", token_ids=(1, 2, 3, 4), length_class="short")
+    path = CampaignPath(prompt, ExecutionMode.DECODE_CACHED)
+    calls = {"n": 0}
+
+    def drifting_reference(*_args, **_kwargs):
+        calls["n"] += 1
+        return SimpleNamespace(
+            reference_fingerprint=f"ref-{calls['n']}",
+            candidate_fingerprint="cand",
+            payload=None,
+            captured_state_tensors=0,
+        )
+
+    monkeypatch.setattr(campaign_module, "run_cross_path_pair", drifting_reference)
+    monkeypatch.setattr(
+        campaign_module,
+        "_pair_to_observation",
+        lambda pair, **kwargs: {"measurements": [], "repetition": kwargs["repetition"]},
+    )
+
+    with pytest.raises(InvalidMeasurement, match="canonical reference traces"):
+        session.measure_forced(
+            case_id="case",
+            phase="medium",
+            path=path,
+            forced_token_ids=(5, 6, 7),
+            repetitions=3,
+            sampling=SamplingMode.GREEDY,
+            continuation_seed=None,
+            exact_required=False,
+            endpoints=None,
+            logits_only=False,
+            decode_steps=3,
+        )

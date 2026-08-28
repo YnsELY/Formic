@@ -174,7 +174,10 @@ faire une promesse pour le pod courant.
    tolérances, elles sont adjudicées sans nouveau forward. Instabilité ou erreur
    structurelle arrête immédiatement.
 5. Les classes écrivent un artefact atomique par `(prompt, chemin,
-   segmentation, répétition)`.
+   segmentation, répétition)`. Leur critère de stabilité bloquant porte sur la
+   **référence canonique** (empreintes identiques sur toutes les répétitions) ;
+   la variabilité du candidat est enregistrée en diagnostic — c'est elle que
+   les trois répétitions et le seuil 2×max quantifient.
 6. La sonde 64 compare recalcul complet et cached, puis écrit ses huit étapes
    de calibration et les 56 étapes
    supplémentaires séparément. Une croissance est rapportée telle quelle,

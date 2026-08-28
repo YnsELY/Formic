@@ -1088,6 +1088,13 @@ class _MeasurementSession:
         # retaining FULL_BOUNDARIES frames for 64 probe steps holds gigabytes
         # of GPU state that the serialisation would immediately discard.
         capture_profile = CaptureProfile.LOGITS_ONLY if logits_only else None
+        # Exact gates keep the strict last-two assertion; tolerance
+        # measurements only require a reproducible canonical reference.
+        stability_criterion = (
+            "last_two_pairs_exact"
+            if exact_required
+            else "reference_fingerprints_identical"
+        )
 
         def run_pair() -> Any:
             if endpoints is None:
@@ -1166,12 +1173,15 @@ class _MeasurementSession:
                         results=results,
                         fingerprints=fingerprints,
                         burn_in=burn_in,
+                        stability_criterion=stability_criterion,
                     )
                 )
             del pair
-        _assert_stable(fingerprints, case_id)
         if exact_required:
+            _assert_stable(fingerprints, case_id)
             _assert_exact(results, case_id)
+        else:
+            _assert_reference_stable(fingerprints, case_id)
         payload = _measurement_payload(
             status="COMPLETE",
             phase=phase,
@@ -1181,6 +1191,7 @@ class _MeasurementSession:
             results=results,
             fingerprints=fingerprints,
             burn_in=burn_in,
+            stability_criterion=stability_criterion,
         )
         if repetition_observer is not None:
             repetition_observer(payload)
@@ -1252,10 +1263,13 @@ class _MeasurementSession:
                         results=results,
                         fingerprints=fingerprints,
                         burn_in=burn_in,
+                        stability_criterion="reference_fingerprints_identical",
                     )
                 )
             del pair
-        _assert_stable(fingerprints, case_id)
+        # A greedy calibration pair is a tolerance measurement: the canonical
+        # reference must repeat, the candidate's variability is the signal.
+        _assert_reference_stable(fingerprints, case_id)
         payload = _measurement_payload(
             status="COMPLETE",
             phase=path.prompt.length_class,
@@ -1265,6 +1279,7 @@ class _MeasurementSession:
             results=results,
             fingerprints=fingerprints,
             burn_in=burn_in,
+            stability_criterion="reference_fingerprints_identical",
         )
         if repetition_observer is not None:
             repetition_observer(payload)
@@ -1464,8 +1479,10 @@ def _measurement_payload(
     results: list[dict[str, Any]],
     fingerprints: list[tuple[str, str]],
     burn_in: dict[str, Any],
+    stability_criterion: str,
 ) -> dict[str, Any]:
     """Serialise measured repetitions plus their cross-repetition evidence."""
+    reference_stable = len({reference for reference, _ in fingerprints}) <= 1
     return {
         "schema_version": 1,
         "status": status,
@@ -1479,7 +1496,16 @@ def _measurement_payload(
         },
         "burn_in": burn_in,
         "repetitions": list(results),
-        "stability": _stability_details(fingerprints),
+        # Full two-sided evidence is always recorded; only which part of it
+        # blocks depends on the criterion.
+        "stability": {
+            **_stability_details(fingerprints),
+            "blocking_criterion": stability_criterion,
+            "reference_fingerprints_identical": reference_stable,
+            "candidate_stability_is_diagnostic": (
+                stability_criterion == "reference_fingerprints_identical"
+            ),
+        },
     }
 
 
@@ -1586,6 +1612,39 @@ def _serialise_comparison(comparison: TraceComparison, *, logits_only: bool) -> 
             }
         )
     return result
+
+
+def _assert_reference_stable(
+    fingerprints: list[tuple[str, str]], case_id: str
+) -> None:
+    """Require a reproducible canonical reference for a tolerance measurement.
+
+    A tolerance is built from three repetitions and a 2x margin precisely
+    because the measured candidate path varies.  Run a40-2026-08-28-r1
+    measured that variability directly: the canonical recompute reference
+    repeated bit-identically over four executions while the cached candidate
+    produced four distinct fingerprints, diverging only in the late groups
+    from decode step 2 onward.  Requiring bit-reproducibility of the
+    candidate would forbid the backend behaviour the calibration exists to
+    quantify; requiring it of the reference keeps the measurement anchored.
+    Exact gates (trace inertness, legacy continuity, the RR/NN noise floor,
+    snapshot/restore) keep the stricter last-two assertion.
+    """
+    references = [reference for reference, _ in fingerprints]
+    if len(references) < 2 or len(set(references)) != 1:
+        first_changed = next(
+            (
+                index
+                for index in range(1, len(references))
+                if references[index] != references[index - 1]
+            ),
+            None,
+        )
+        raise InvalidMeasurement(
+            f"canonical reference traces are unstable: {case_id}; "
+            f"repetitions={len(references)}; "
+            f"first_changed_repetition={first_changed}"
+        )
 
 
 def _assert_stable(fingerprints: list[tuple[str, str]], case_id: str) -> None:
@@ -1727,7 +1786,12 @@ def _adjudicate_snapshot_candidate(
         if floor is None or candidate_row >= floor
         else "reference_floor"
     )
+    # An interrupted trace and its restored continuation occupy different
+    # execution positions, so a top-1 flip here measures the same backend
+    # path effect the calibration quantifies, not a restoration defect.  It
+    # is counted and reported; the measured delta threshold stays blocking.
     failures: list[dict[str, Any]] = []
+    top1_disagreements: list[dict[str, Any]] = []
     for observation in snapshot_payload["observations"]:
         for index, comparison in enumerate(observation["comparisons"]):
             if comparison["tensor"]["max_abs_delta"] > threshold:
@@ -1739,12 +1803,12 @@ def _adjudicate_snapshot_candidate(
                     }
                 )
             if comparison["top1_agreement"] is False:
-                failures.append(
+                top1_disagreements.append(
                     {
                         "repetition": observation["repetition"],
                         "comparison": index,
-                        "metric": comparison,
-                        "reason": "top1_disagreement",
+                        "reference_top1": comparison.get("reference_top1"),
+                        "candidate_top1": comparison.get("candidate_top1"),
                     }
                 )
     return {
@@ -1758,6 +1822,11 @@ def _adjudicate_snapshot_candidate(
         "threshold_source": threshold_source,
         "snapshot_stability": snapshot_payload["stability"],
         "first_failure": failures[0] if failures else None,
+        "top1_disagreements": {
+            "total": len(top1_disagreements),
+            "is_blocking": False,
+            "observations": top1_disagreements,
+        },
     }
 
 

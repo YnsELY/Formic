@@ -30,17 +30,22 @@ off. Nothing downstream starts before that (plan rule 1).
 > alternating calendar while RR/NN — the pairs that produce the floor — were
 > stable 3/3 (`reports/step2_a40_run_2026-08-27_diagnostic.md`). The blocking
 > last-two assertion now applies to RR/NN only; the mixed pair is a recorded
-> non-blocking diagnostic. Measured RR floor: 16.09 with top-1 flips —
-> cross-position comparisons downstream (cross-path calibration, snapshot
-> adjudication) may therefore fail the hard top-1 verdict; the explicit
-> decision is to rerun and measure everything before amending any criterion.
-> Hardening for that decision: derived artefacts (raw measurements, candidate
-> tolerances, adjudication, verdict) are written before the 64-frame probe
-> and the final gates are judged together at the end, so a late failure can
-> never erase collected evidence; the probe now runs three measured
-> repetitions like every other measurement. The 9,925-forward v3 calibration
-> remains to be rerun (runbook: `docs/runbooks/step2_pod_campaign.md`); no
-> tolerance or official SPEC-02 PASS exists yet.
+> non-blocking diagnostic. Run `a40-2026-08-28-r1` then completed seven
+> phases — including the noise floor on all three prompts (RR floors up to
+> 19.5625) and snapshot/restore on the real checkpoint — plus the whole short
+> class and twelve medium cases, before failing on medium cached decode
+> (`reports/step2_a40_run_2026-08-28_diagnostic.md`). It measured the last two
+> structural locks: the canonical reference repeats bit-identically over four
+> executions while the cached candidate does not (continuous variability in
+> the late groups from step 2), and cross-path top-1 agreement is 3/8, 1/8 and
+> 2/8 on stable cases while the same-path control stays exact 8/8 at zero
+> delta. Protocol v4 therefore anchors tolerance-measurement stability on the
+> canonical reference (candidate variability recorded as diagnostic) and
+> counts cross-position top-1 flips instead of failing on them; both stay
+> blocking where the protocol is aligned, and every affected row remains
+> bounded/REVIEW_REQUIRED. The 9,925-forward calibration remains to be rerun
+> (runbook: `docs/runbooks/step2_pod_campaign.md`); no tolerance or official
+> SPEC-02 PASS exists yet.
 
 Reference documents, in order of authority: the checkpoint audit
 (`/workspace/audits/qwen3_8_27b/`) → `FINAL_TARGET_ARCHITECTURE.md` (CAPE-R) →
