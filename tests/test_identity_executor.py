@@ -236,3 +236,86 @@ def test_greedy_pair_forces_reference_tokens_without_a_separate_generation_pass(
         for comparison in result.payload.comparisons
         for item in comparison.measurements
     )
+
+
+def test_long_segmented_reference_matches_candidate_frame_profiles():
+    """Run a40-2026-08-28-r2: the long segmented reference must capture what
+    the paired candidate frame captures (LOGITS_ONLY before the final frame,
+    FINAL_STATE_ONLY on it), or trace comparison rejects the differing
+    model-state registries."""
+    reference_model = toy_model(seed=45)
+    candidate_model = toy_model(seed=45)
+    reference = Endpoint(
+        "reference",
+        reference_model,
+        HybridGroupView.from_text_config(reference_model.config),
+        False,
+    )
+    candidate = Endpoint(
+        "runner",
+        candidate_model,
+        HybridGroupView.from_text_config(candidate_model.config),
+        True,
+    )
+
+    result = run_cross_path_pair(
+        reference,
+        candidate,
+        prompt_token_ids=(1, 2, 3, 4, 5, 6, 7, 8, 9),
+        candidate_mode=ExecutionMode.PREFILL_SEGMENTED,
+        length_class="long",
+        segmentation="median",
+        capture=True,
+    )
+
+    assert isinstance(result.payload, AlignedCasePayload)
+    for path in (result.payload.reference, result.payload.candidate):
+        assert len(path.frames) == 2
+        first, last = path.frames[0].trace, path.frames[1].trace
+        # Non-final frames: logits only, no boundary capture, empty
+        # model-state registry, no final snapshot.
+        assert first.boundaries == ()
+        assert first.model_state == ()
+        assert first.final_state is None
+        # Final frame: final-state capture with a populated registry.
+        assert last.final_state is not None
+        assert last.model_state != ()
+    # Registries agree, so the structural gate accepts the comparison and the
+    # only per-frame measurements are logits (plus final-state points at the
+    # end).
+    assert len(result.payload.comparisons) == 2
+
+
+def test_short_segmented_reference_keeps_full_boundaries_everywhere():
+    """Non-regression: short/medium segmented capture is unchanged by the
+    per-prefix profile fix."""
+    reference_model = toy_model(seed=45)
+    candidate_model = toy_model(seed=45)
+    reference = Endpoint(
+        "reference",
+        reference_model,
+        HybridGroupView.from_text_config(reference_model.config),
+        False,
+    )
+    candidate = Endpoint(
+        "runner",
+        candidate_model,
+        HybridGroupView.from_text_config(candidate_model.config),
+        True,
+    )
+
+    result = run_cross_path_pair(
+        reference,
+        candidate,
+        prompt_token_ids=(1, 2, 3, 4, 5, 6, 7, 8, 9),
+        candidate_mode=ExecutionMode.PREFILL_SEGMENTED,
+        length_class="short",
+        segmentation="median",
+        capture=True,
+    )
+
+    assert isinstance(result.payload, AlignedCasePayload)
+    for path in (result.payload.reference, result.payload.candidate):
+        for frame in path.frames:
+            assert frame.trace.boundaries != ()
+            assert frame.trace.model_state != ()

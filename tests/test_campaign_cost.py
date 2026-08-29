@@ -31,7 +31,7 @@ def test_balanced_cross_path_main_campaign_cost_is_stable():
             total += aggregate(decode_prompt, "decode_recompute")
 
     assert total.forwards == 2_104
-    assert round(total.transfer_bytes / 2**30, 2) == 73.03
+    assert round(total.transfer_bytes / 2**30, 2) == 68.23
 
 
 def test_final_session_includes_balanced_legacy_and_cross_path_probe():

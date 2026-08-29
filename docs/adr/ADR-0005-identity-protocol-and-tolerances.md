@@ -127,7 +127,12 @@ Short and medium prompts capture residual hidden states at all 17 group
 boundaries plus the state of the group completed at its natural exit boundary.
 Long prompts capture logits and final state only. Output logits are measured at
 the model output only. GDN/KV are `not_applicable` for full recomputation with
-no cache.
+no cache. In segmented prefill, each full-prefix reference captures exactly
+what the candidate segment frame it is paired with captures: for the long
+class, logits only before the final frame and final state on the last prefix.
+Resolving each single-frame reference trace independently would mark every
+prefix as final, over-capturing intermediate state against this rule and
+making the two sides' model-state registries differ.
 
 Long prompts omit full-recomputation decode and retain only median and regular
 quarter segmentations. Early and late single cuts, and cached-versus-recompute
@@ -327,6 +332,18 @@ created only by the final A40 calibration campaign.
   (medium recompute, Formic against stock) exact 8/8 with delta 0.0. Top-1
   agreement on stable cases: 3/8, 1/8, 2/8. See
   `reports/step2_a40_run_2026-08-28_diagnostic.md`.
+- Campaign run `a40-2026-08-28-r2` (commit 7a4bea5, protocol v4): eight
+  phases complete, including the whole medium class. The v4 criteria are
+  validated by measurement — `medium_cache_regression / decode_cached /
+  greedy` passed with `reference_fingerprints_identical: true` while the
+  candidate's variability stayed recorded as diagnostic, and its three
+  candidate fingerprints were identical to run r1's, so that variability is
+  itself reproducible across processes. The run then failed on the first
+  long segmented case with `TraceStructureError: model-attached state
+  registry differs`: single-frame reference prefixes each resolved as final
+  and captured final state, against long-class capture rules and against the
+  candidate's per-frame profiles. See
+  `reports/step2_a40_run_2026-08-28_r2_diagnostic.md`.
 - Weight-free burn-in control: `tests/test_burn_in.py` replays the exact
   failure shape against a switching-realization fake — the gate fails without
   burn-in and passes with it, with the burn-in recorded as evidence.

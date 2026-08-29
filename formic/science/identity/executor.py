@@ -237,16 +237,31 @@ def execute_reference_for_candidate(
     if candidate_mode is ExecutionMode.PREFILL_SEGMENTED:
         if segmentation is None:
             raise ValueError("segmented prefill requires a strategy")
+        parts = tuple(segment_slices(len(prompt_token_ids), segmentation))
         frames: list[Frame] = []
-        for step, part in enumerate(segment_slices(len(prompt_token_ids), segmentation)):
+        for step, part in enumerate(parts):
             prefix = prompt_token_ids[: part.stop]
+            # Each full-prefix reference is a single-frame trace, so left to
+            # its own resolution it would always capture as a *final* frame.
+            # The comparison pairs it with the candidate's segment frame at
+            # the same step, whose profile depends on finality (long class:
+            # FINAL_STATE_ONLY only on the last frame, LOGITS_ONLY before).
+            # Pin the prefix profile to the matching candidate frame so both
+            # sides capture the same registry (run a40-2026-08-28-r2 failed
+            # with "model-attached state registry differs" on the first long
+            # segmented case without this).
+            prefix_profile = (
+                capture_profile
+                if capture_profile is not None
+                else _capture_profile(length_class, step == len(parts) - 1)
+            )
             trace = execute_path(
                 endpoint,
                 prompt_token_ids=prefix,
                 mode=ExecutionMode.PREFILL_FULL,
                 length_class=length_class,
                 capture=capture,
-                capture_profile=capture_profile,
+                capture_profile=prefix_profile,
             )
             if capture:
                 assert trace is not None and len(trace.frames) == 1

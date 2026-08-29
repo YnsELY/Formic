@@ -172,7 +172,12 @@ def _reference_transfer(
     if path == "prefill_segmented":
         prefixes = _reference_frames(prompt, path, segmentation, decode_steps)
         if prompt.length_class == "long":
-            return sum(_long_final_bytes(prefix) for prefix in prefixes)
+            # Each reference prefix captures like the candidate frame it is
+            # paired with: logits only before the final frame, final state on
+            # the last prefix.
+            return (len(prefixes) - 1) * LOGITS_BYTES + _long_final_bytes(
+                prefixes[-1]
+            )
         return sum(_full_frame_bytes(prefix, prefix) for prefix in prefixes)
     if path == "decode_cached" and prompt.length_class != "long":
         return _trace_transfer(prompt, "decode_recompute", None, decode_steps)

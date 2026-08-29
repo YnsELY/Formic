@@ -29,7 +29,7 @@ _PHASE_TRANSFER_GIB = {
     "reference_continuations": 0.0,
     "short": 18.93,
     "medium": 35.23,
-    "long": 18.87,
+    "long": 14.07,
     "accumulation_probe_64": 0.47,
 }
 

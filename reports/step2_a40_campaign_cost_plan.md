@@ -73,9 +73,9 @@ l'évidence admise par cas est inchangée par rapport au plan v2.
 | 6 | Continuations de référence, greedy + 3 seeds | 96 | négligeable | 0,08 h | `E_continuations` |
 | 7 | Classe courte | 808 | 18,93 GiB | 0,69 h | `E_short` |
 | 8 | Classe moyenne | 808 | 35,23 GiB | 0,69 h | `E_medium` |
-| 9 | Classe longue | 488 | 18,87 GiB | 0,42 h | `E_long` |
+| 9 | Classe longue | 488 | 14,07 GiB | 0,42 h | `E_long` |
 | 10 | Sonde cached/recalcul 64, court + moyen | 2 560 | 0,47 GiB | 2,19 h | `E_probe64` |
-| | **Total** | **9 925** | **84,36 GiB** | **8,49 h non calibrées** | `T_preflight + ΣE` |
+| | **Total** | **9 925** | **79,56 GiB** | **8,49 h non calibrées** | `T_preflight + ΣE` |
 
 La sonde 64 tourne à trois répétitions mesurées comme toutes les autres
 mesures (burn-in + rép 0 couvrent la fenêtre transitoire de deux traces ;
@@ -124,10 +124,16 @@ transferts comptent le burn-in (capture réelle).
 | moyen | decode cached | — | `310 + 7×1` vs `310…317` | 160 | 8,47 GiB |
 | moyen | decode recompute | — | `310…317` | 208 | 5,74 GiB |
 | long | prefill | complet | `2 437`; `2 542` | 40 | 3,62 GiB |
-| long | prefill | médiane | `1 218/1 219`; `1 271/1 271` | 80 | 4,83 GiB |
-| long | prefill | quarts | `610/610/610/607`; `636/636/636/634` | 160 | 7,24 GiB |
+| long | prefill | médiane | `1 218/1 219`; `1 271/1 271` | 80 | 3,63 GiB |
+| long | prefill | quarts | `610/610/610/607`; `636/636/636/634` | 160 | 3,64 GiB |
 | long | decode cached | — | `2 437 + 7×1` | 208 | 3,18 GiB |
-| | **Total calibration** | | | **2 104** | **73,03 GiB** |
+| | **Total calibration** | | | **2 104** | **68,23 GiB** |
+
+En classe longue, chaque préfixe de référence capture comme la frame
+candidate qu'il double : logits seuls avant la frame finale, état final sur le
+dernier préfixe (conformité ADR-0005 « long : logits et état final
+seulement »). Les transferts des segmentations longues baissent en
+conséquence.
 
 ## Estimation automatique après preflight
 

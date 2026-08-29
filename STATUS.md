@@ -43,9 +43,18 @@ off. Nothing downstream starts before that (plan rule 1).
 > canonical reference (candidate variability recorded as diagnostic) and
 > counts cross-position top-1 flips instead of failing on them; both stay
 > blocking where the protocol is aligned, and every affected row remains
-> bounded/REVIEW_REQUIRED. The 9,925-forward calibration remains to be rerun
-> (runbook: `docs/runbooks/step2_pod_campaign.md`); no tolerance or official
-> SPEC-02 PASS exists yet.
+> bounded/REVIEW_REQUIRED. Run `a40-2026-08-28-r2` validated those two
+> criteria by measurement — the medium class completed in full — and then
+> failed on the first long segmented case with a structural mismatch:
+> single-frame reference prefixes each resolved as final and captured final
+> state, so the two sides' model-state registries differed. Segmented
+> reference prefixes now inherit the paired candidate frame's capture
+> profile, which also restores ADR-0005 long-class capture rules and lowers
+> the planned long-class transfer from 18.87 to 14.07 GiB
+> (`reports/step2_a40_run_2026-08-28_r2_diagnostic.md`). The 9,925-forward
+> calibration remains to be rerun (runbook:
+> `docs/runbooks/step2_pod_campaign.md`); no tolerance or official SPEC-02
+> PASS exists yet.
 
 Reference documents, in order of authority: the checkpoint audit
 (`/workspace/audits/qwen3_8_27b/`) → `FINAL_TARGET_ARCHITECTURE.md` (CAPE-R) →

@@ -310,8 +310,12 @@ anchors tolerance-measurement stability on the canonical reference (the
 candidate's variability is what the three repetitions and the 2x margin
 quantify) and counts cross-position top-1 flips rather than failing on them;
 both criteria stay blocking where the protocol is aligned, and every affected
-tolerance row remains bounded/REVIEW_REQUIRED. The final A40 tolerance
-calibration has not yet completed.
+tolerance row remains bounded/REVIEW_REQUIRED. Run `a40-2026-08-28-r2` then
+completed eight phases — validating those criteria on the full medium class —
+before a structural mismatch on the first long segmented case: segmented
+reference prefixes now inherit the paired candidate frame's capture profile
+([diagnostic](reports/step2_a40_run_2026-08-28_r2_diagnostic.md)). The final
+A40 tolerance calibration has not yet completed.
 
 SPEC-02 is currently pinned to the following protocol:
 
