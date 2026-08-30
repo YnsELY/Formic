@@ -1,71 +1,71 @@
 {
-  "model_load_hours": 0.08558481322394478,
-  "model_load_seconds": 308.1053276062012,
+  "model_load_hours": 0.07844913323720296,
+  "model_load_seconds": 282.41687965393066,
   "model_processes": 1,
   "phases": [
     {
-      "estimated_hours": 0.16266703304085467,
-      "estimated_seconds": 585.6013189470768,
+      "estimated_hours": 0.17045482183611796,
+      "estimated_seconds": 613.6373586100246,
       "forwards": 144,
       "name": "trace_inertness"
     },
     {
-      "estimated_hours": 3.1354967671560954,
-      "estimated_seconds": 11287.788361761943,
+      "estimated_hours": 3.2686167757119113,
+      "estimated_seconds": 11767.020392562881,
       "forwards": 3872,
       "name": "legacy_continuity"
     },
     {
-      "estimated_hours": 0.5843792466421714,
-      "estimated_seconds": 2103.7652879118173,
+      "estimated_hours": 0.6105375719157125,
+      "estimated_seconds": 2197.935258896565,
       "forwards": 752,
       "name": "noise_floor"
     },
     {
-      "estimated_hours": 0.05266497713563343,
-      "estimated_seconds": 189.59391768828036,
+      "estimated_hours": 0.05502146125725768,
+      "estimated_seconds": 198.07726052612765,
       "forwards": 64,
       "name": "snapshot_restore"
     },
     {
-      "estimated_hours": 0.07535343398029605,
-      "estimated_seconds": 271.2723623290658,
+      "estimated_hours": 0.07955320298777628,
+      "estimated_seconds": 286.3915307559946,
       "forwards": 96,
       "name": "reference_continuations"
     },
     {
-      "estimated_hours": 0.6987135265429348,
-      "estimated_seconds": 2515.3686955545654,
+      "estimated_hours": 0.799149114806189,
+      "estimated_seconds": 2876.9368133022804,
       "forwards": 808,
       "name": "short"
     },
     {
-      "estimated_hours": 0.7216272200277593,
-      "estimated_seconds": 2597.857992099933,
+      "estimated_hours": 0.7710144467992812,
+      "estimated_seconds": 2775.6520084774124,
       "forwards": 808,
       "name": "medium"
     },
     {
-      "estimated_hours": 0.5312146896446849,
-      "estimated_seconds": 1912.3728827208654,
+      "estimated_hours": 0.5563870527141119,
+      "estimated_seconds": 2002.993389770803,
       "forwards": 488,
       "name": "long"
     },
     {
-      "estimated_hours": 2.2494732884770468,
-      "estimated_seconds": 8098.103838517368,
+      "estimated_hours": 2.2927990492763723,
+      "estimated_seconds": 8254.07657739494,
       "forwards": 2560,
       "name": "accumulation_probe_64"
     }
   ],
-  "preflight_elapsed_hours": 0.29983724532558376,
-  "preflight_elapsed_seconds": 1079.4140831721015,
+  "preflight_elapsed_hours": 0.32556733535750226,
+  "preflight_elapsed_seconds": 1172.0424072870082,
   "protocol": "SPEC-02-h8-option-b-balanced-v3",
-  "remaining_estimated_hours": 8.211590182647477,
-  "remaining_estimated_seconds": 29561.724657530915,
+  "remaining_estimated_hours": 8.603533497304731,
+  "remaining_estimated_seconds": 30972.72059029703,
   "report": "ESTIMATE",
   "schema_version": 1,
-  "total_estimated_hours": 8.51142742797306,
-  "total_estimated_seconds": 30641.138740703016,
+  "total_estimated_hours": 8.929100832662233,
+  "total_estimated_seconds": 32144.76299758404,
   "total_forwards": 9925
 }
